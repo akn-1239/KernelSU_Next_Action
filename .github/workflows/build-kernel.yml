@@ -99,6 +99,7 @@ jobs:
         echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
         bash KernelSU-Next/kernel/setup.sh
         grep -rl "#include <linux/pgtable.h>" KernelSU-Next/kernel | xargs -r sed -i 's|#include <linux/pgtable.h>|#include <asm/pgtable.h>|g'
+        grep -rl "strncpy_from_user_nofault" KernelSU-Next/kernel | xargs -r sed -i 's/strncpy_from_user_nofault/strncpy_from_unsafe/g'
         KSU_VERSION=$(cd KernelSU-Next && expr $(git rev-list --count HEAD) + 10200)
         echo "UPLOADNAME=-KernelSU_$KSU_VERSION" >> $GITHUB_ENV
 
@@ -192,8 +193,7 @@ jobs:
         export KBUILD_BUILD_HOST=Tuesday1028
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
         sed -i 's/^CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        sed -i 's/apq8016-sbc[a-z0-9._-]*\.dtb//g' arch/arm64/boot/dts/qcom/Makefile
-        sed -i 's/kona-rumi\.dtb//g' arch/arm64/boot/dts/qcom/Makefile
+        sed -i 's/^subdir-y += qcom$/# subdir-y += qcom/' arch/arm64/boot/dts/Makefile
         sed -i 's/[a-zA-Z0-9_-]*dvt[a-zA-Z0-9._-]*\.dtbo//g' arch/arm64/boot/dts/vendor/qcom/Makefile
         grep -q '^CONFIG_MODULE_SIG' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_MODULE_SIG=n' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         grep -q '^CONFIG_KPROBES=y' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_KPROBES=y' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
