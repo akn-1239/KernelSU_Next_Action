@@ -190,6 +190,8 @@ jobs:
         export KBUILD_COMPILER_STRING="$(clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
         export KBUILD_BUILD_HOST=Tuesday1028
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
+        sed -i 's/^CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
+        grep -q '^CONFIG_MODULE_SIG' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_MODULE_SIG=n' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang ${{ env.KERNEL_CONFIG }}
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE=aarch64-linux-gnu- CONFIG_MODULE_SIG=n CONFIG_MODULE_SIG_ALL=n DTC_EXT=dtc HOSTCFLAGS="-w"
         
