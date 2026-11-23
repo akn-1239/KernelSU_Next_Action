@@ -48,8 +48,8 @@ jobs:
     - name: Download Clang Toolchain
       run: |
         mkdir clang
-        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r1/clang-r416183b.tar.gz
-        tar -C clang/ -zxf clang-r416183b.tar.gz
+        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-13.0.0_r3/clang-r450784d.tar.gz
+        tar -C clang/ -zxf clang-r450784d.tar.gz
 
     - name: Download mkbootimg tools
       if: env.MAKE_BOOT_IMAGE == 'true'
@@ -189,8 +189,7 @@ jobs:
         export KBUILD_COMPILER_STRING="$(clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
         export KBUILD_BUILD_HOST=Tuesday1028
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
-        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE=aarch64-linux-gnu- CONFIG_MODULE_SIG=n CONFIG_MODULE_SIG_ALL=n
-        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE=aarch64-linux-gnu- CONFIG_MODULE_SIG=n CONFIG_MODULE_SIG_ALL=n DTC_EXT=dtc
+        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang LLVM=1 LLVM_IAS=1 CONFIG_MODULE_SIG=n CONFIG_MODULE_SIG_ALL=n DTC_EXT=dtc HOSTCFLAGS="-w"
         
     - name: Check a kernel output files
       run: |
