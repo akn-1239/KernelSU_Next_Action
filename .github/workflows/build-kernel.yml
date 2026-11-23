@@ -96,9 +96,7 @@ jobs:
         ln -s $(pwd)/KernelSU-Next/kernel drivers/kernelsu
         echo "obj-\$(CONFIG_KSU) += kernelsu/" >> drivers/Makefile
         echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-        cd KernelSU-Next
-        bash kernel/setup.sh
-        cd ..
+        bash KernelSU-Next/kernel/setup.sh
         KSU_VERSION=$(cd KernelSU-Next && expr $(git rev-list --count HEAD) + 10200)
         echo "UPLOADNAME=-KernelSU_$KSU_VERSION" >> $GITHUB_ENV
 
