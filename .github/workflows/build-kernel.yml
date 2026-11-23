@@ -194,6 +194,7 @@ jobs:
         sed -i 's/apq8016-sbc[a-z0-9._-]*\.dtb//g' arch/arm64/boot/dts/qcom/Makefile
         sed -i 's/kona-rumi\.dtb//g' arch/arm64/boot/dts/qcom/Makefile
         grep -q '^CONFIG_MODULE_SIG' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_MODULE_SIG=n' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
+        grep -q '^CONFIG_KPROBES=y' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_KPROBES=y' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang ${{ env.KERNEL_CONFIG }}
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE=aarch64-linux-gnu- CONFIG_MODULE_SIG=n CONFIG_MODULE_SIG_ALL=n HOSTCFLAGS="-w"
         
