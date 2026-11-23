@@ -91,9 +91,9 @@ jobs:
            echo " 致命错误: 当前目录下找不到 drivers 文件夹！源码不完整！"
            exit 1
         fi
-        wget -O ksu.zip https://github.com/KernelSU-Next/KernelSU-Next/archive/refs/heads/dev.zip
+        wget -O ksu.zip https://github.com/wshamroukh/KernelSU-Next-SUSFS-kernelv4.19/archive/refs/heads/legacy.zip
         unzip ksu.zip
-        mv KernelSU-Next-dev KernelSU-Next
+        mv KernelSU-Next-SUSFS-kernelv4.19-legacy KernelSU-Next
         ln -s $(pwd)/KernelSU-Next/kernel drivers/kernelsu
         echo "obj-\$(CONFIG_KSU) += kernelsu/" >> drivers/Makefile
         echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
