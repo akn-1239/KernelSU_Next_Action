@@ -100,6 +100,8 @@ jobs:
         bash KernelSU-Next/kernel/setup.sh
         grep -rl "#include <linux/pgtable.h>" KernelSU-Next/kernel | xargs -r sed -i 's|#include <linux/pgtable.h>|#include <asm/pgtable.h>|g'
         grep -rl "strncpy_from_user_nofault" KernelSU-Next/kernel | xargs -r sed -i 's/strncpy_from_user_nofault/strncpy_from_unsafe/g'
+        grep -rl "copy_to_kernel_nofault" KernelSU-Next/kernel | xargs -r sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g'
+        grep -rl "copy_from_kernel_nofault" KernelSU-Next/kernel | xargs -r sed -i 's/copy_from_kernel_nofault/probe_kernel_read/g'
         KSU_VERSION=$(cd KernelSU-Next && expr $(git rev-list --count HEAD) + 10200)
         echo "UPLOADNAME=-KernelSU_$KSU_VERSION" >> $GITHUB_ENV
 
@@ -198,7 +200,7 @@ jobs:
         grep -q '^CONFIG_MODULE_SIG' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_MODULE_SIG=n' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         grep -q '^CONFIG_KPROBES=y' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_KPROBES=y' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang ${{ env.KERNEL_CONFIG }}
-        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE=aarch64-linux-gnu- CONFIG_MODULE_SIG=n CONFIG_MODULE_SIG_ALL=n HOSTCFLAGS="-w -fcommon" DTC_EXT=dtc
+        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE=aarch64-linux-gnu- CONFIG_MODULE_SIG=n CONFIG_MODULE_SIG_ALL=n HOSTCFLAGS="-w -fcommon" DTC_EXT=dtc Image
 
         
     - name: Check a kernel output files
