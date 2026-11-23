@@ -81,14 +81,13 @@ jobs:
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel || exit 1
-        if [ ! -d "drivers" ] && [ -d "android-kernel" ]; then
-           cd android-kernel
-        fi
         if [ ! -d "drivers" ]; then
            echo " 致命错误: 当前目录下找不到 drivers 文件夹！源码不完整！"
            exit 1
         fi
-        git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next --depth=1
+        wget -O ksu.zip https://github.com/KernelSU-Next/KernelSU-Next/archive/refs/heads/main.zip
+        unzip ksu.zip
+        mv KernelSU-Next-main KernelSU-Next
         ln -s $(pwd)/KernelSU-Next/kernel drivers/kernelsu
         echo "obj-\$(CONFIG_KSU) += kernelsu/" >> drivers/Makefile
         echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
