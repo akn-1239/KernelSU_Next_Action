@@ -435,50 +435,108 @@ jobs:
           echo "[check] dtb/dtbo 产出（若有）："
           ls -lh out/arch/arm64/boot/dts/qcom/*.dtb 2>/dev/null | tail -5 || echo "  无独立 dtb（已并入 Image）"
 
-      - name: Make Anykernel3
+      # ========== 路线1：原厂 boot.img + 只替换 kernel（magiskboot 重打包） ==========
+      # 完全保留原厂 boot 的结构（header / ramdisk / dtb / avb footer），仅替换内核，
+      # 最稳，出问题也只动 boot，recovery + fastboot 都还在。
+      # 需要把原厂 boot.img 放到仓库根目录（文件名 boot.img）才启用，没有就自动跳过。
+      - name: Repack boot image (stock boot.img + new kernel)
         run: |
           set -e
-          cd $GITHUB_WORKSPACE/kernel_workspace
+          WS=$GITHUB_WORKSPACE/kernel_workspace
+          cd $WS
+          # magiskboot 用 AK3 仓库里的预编译二进制：unpack 会按原镜像真实 header 与压缩格式解析
+          rm -rf ak3tools
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3tools
+          cp ak3tools/tools/magiskboot .
+          chmod +x magiskboot
+          if [ ! -f "$GITHUB_WORKSPACE/boot.img" ]; then
+            echo "[skip] 仓库根目录没有原厂 boot.img，跳过 boot 镜像打包"
+            echo "[skip] 把全量包 payload.bin 里解出的 boot.img 放到仓库根目录（文件名必须是 boot.img）即可启用"
+            exit 0
+          fi
+          rm -rf bootwork && mkdir -p bootwork/stock bootwork/verify
+
+          cp "$GITHUB_WORKSPACE/boot.img" bootwork/stock/boot.img
+          cd bootwork/stock
+          echo "[stock] 原厂 boot 解包："
+          $WS/magiskboot unpack boot.img
+          ls -lh
+          ORIG_K=$(stat -c%s kernel 2>/dev/null || echo 0)
+          echo "[stock] 原厂 kernel 大小: $ORIG_K bytes"
+
+          cp $WS/android-kernel/out/arch/arm64/boot/Image kernel
+          NEW_K=$(stat -c%s kernel)
+          echo "[new] 新 kernel 大小: $NEW_K bytes"
+          if [ "$ORIG_K" -gt 0 ] && [ "$NEW_K" -gt $((ORIG_K + 8388608)) ]; then
+            echo "[warn] 新 kernel 比原厂大 8MB 以上，boot 分区可能装不下，刷入后会无法引导"
+          fi
+
+          echo "[repack] 用原厂 header/ramdisk 重新打包 ..."
+          $WS/magiskboot repack boot.img $WS/boot-9R-new.img
+          ls -lh $WS/boot-9R-new.img
+
+          cd $WS/bootwork/verify
+          cp $WS/boot-9R-new.img .
+          echo "[verify] 回解新镜像，确认结构完整："
+          $WS/magiskboot unpack boot-9R-new.img >/dev/null
+          ls -lh
+          echo "[verify] 新镜像内 kernel 大小: $(stat -c%s kernel) bytes"
+          echo "[done] 产物: $WS/boot-9R-new.img"
+
+      # ========== 备用路线：AnyKernel3 zip（参数全部按 9R 单分区 + OOS/ColorOS14 定死） ==========
+      # 关键：不再用 auto 猜 ramdisk 压缩 —— 直接从原厂 boot.img 读出 RAMDISK_FMT 写进去；
+      # PATCH_VBMETA_FLAG=0 彻底禁止 AK3 改 vbmeta（这是上次全黑的最大嫌疑）。
+      - name: Make Anykernel3 zip
+        run: |
+          set -e
+          WS=$GITHUB_WORKSPACE/kernel_workspace
+          cd $WS
+          if [ ! -x magiskboot ]; then
+            rm -rf ak3tools
+            git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3tools
+            cp ak3tools/tools/magiskboot .
+            chmod +x magiskboot
+          fi
           rm -rf ak3
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
           cp android-kernel/out/arch/arm64/boot/Image ak3/Image
-          cd ak3
-          # 一加9R：lemonades / sm8250 / boot 分区
-          sed -i 's|^kernel.string=.*|kernel.string=OnePlus 9R (lemonades) 4.19 KernelSU-Next|' anykernel.sh
-          sed -i 's|^device.name1=.*|device.name1=lemonades|' anykernel.sh
-          sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
-          sed -i 's|^is_slot_device=.*|is_slot_device=auto;|' anykernel.sh
-          # 9R 在 OOS11 上报 ro.product.device=OnePlus9R，与 codename lemonades 不一致会被 AK3 拒绝
-          sed -i 's|^do.devicecheck=.*|do.devicecheck=0;|' anykernel.sh
-          grep -q '^do.devicecheck=' anykernel.sh || sed -i '/^device.name1=/i do.devicecheck=0;' anykernel.sh
-          sed -i 's|^device.name1=.*|device.name1=lemonades\ndevice.name2=OnePlus9R|' anykernel.sh
-          echo "[ak3] anykernel.sh 关键参数："
-          grep -E '^kernel.string=|^device.name1=|^block=|^is_slot_device=' anykernel.sh
-          ZIP=$GITHUB_WORKSPACE/kernel_workspace/AnyKernel3_lemonades_${{ env.BUILD_TIME }}.zip
-          zip -r9 "$ZIP" . -x ".git/*" -x "*~" -x "*.zip"
-          echo "[ak3] 产物: $ZIP"
-          ls -lh "$ZIP"
 
-      - name: Make boot image
-        run: |
-          set -e
-          cd $GITHUB_WORKSPACE
-          # 需要把原厂 boot.img 放到仓库根目录（名字必须是 boot.img）
-          if [ ! -f boot.img ]; then
-            echo "[skip] 仓库根目录没有 boot.img（原厂 boot 镜像）"
-            echo "[skip] boot 镜像打包跳过；直接用 AnyKernel3 zip 刷入即可"
-            exit 0
+          # 从原厂 boot.img 读真实 ramdisk 压缩格式；没有原厂镜像时用 auto
+          # （auto 也是 magiskboot 嗅探，不是硬猜；只有明确读到格式才写死）
+          RCOMP=auto
+          if [ -f "$GITHUB_WORKSPACE/boot.img" ]; then
+            rm -rf /tmp/det && mkdir -p /tmp/det && cp "$GITHUB_WORKSPACE/boot.img" /tmp/det/
+            ( cd /tmp/det && $WS/magiskboot unpack boot.img 2>&1 ) > /tmp/det/unpack.log || true
+            FMT=$(sed -n 's/.*RAMDISK_FMT[[:space:]]*\[\([^]]*\)\].*/\1/p' /tmp/det/unpack.log | head -1)
+            [ -n "$FMT" ] && RCOMP="$FMT"
+            echo "[ak3] 原厂 boot header/ramdisk 信息："
+            grep -E 'HEADER_VER|KERNEL_FMT|RAMDISK_FMT' /tmp/det/unpack.log || true
+          else
+            echo "[ak3] 没有原厂 boot.img，无法读取真实格式，改用 auto（magiskboot 自行嗅探）"
           fi
-          cd $GITHUB_WORKSPACE/kernel_workspace
-          git clone --depth=1 https://android.googlesource.com/platform/system/tools/mkbootimg mkbt
-          python3 mkbt/unpack_bootimg.py --boot_img $GITHUB_WORKSPACE/boot.img --out unpack --format mkbootimg > unpack/mkbootimg_args.txt
-          echo "[boot] 原 boot header 参数："
-          cat unpack/mkbootimg_args.txt
-          ARGS=$(tr '\n' ' ' < unpack/mkbootimg_args.txt)
-          python3 mkbt/mkbootimg.py $ARGS \
-            --kernel android-kernel/out/arch/arm64/boot/Image \
-            --output $GITHUB_WORKSPACE/boot-9R-new.img
-          ls -lh $GITHUB_WORKSPACE/boot-9R-new.img || echo "[warn] boot.img 打包失败，用 AnyKernel3 zip 刷入"
+          echo "[ak3] 采用 ramdisk 压缩: $RCOMP"
+
+          cd ak3
+          sed -i 's|^kernel.string=.*|kernel.string=OnePlus 9R (lemonades) ColorOS14 KernelSU-Next|' anykernel.sh
+          sed -i 's|^device.name1=.*|device.name1=lemonades\ndevice.name2=OnePlus9R|' anykernel.sh
+          sed -i 's|^BLOCK=.*|BLOCK=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
+          sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
+          sed -i 's|^do.devicecheck=.*|do.devicecheck=0;|' anykernel.sh
+          sed -i 's|^IS_SLOT_DEVICE=.*|IS_SLOT_DEVICE=0;|' anykernel.sh
+          sed -i "s|^RAMDISK_COMPRESSION=.*|RAMDISK_COMPRESSION=$RCOMP;|" anykernel.sh
+          if grep -q '^PATCH_VBMETA_FLAG=' anykernel.sh; then
+            sed -i 's|^PATCH_VBMETA_FLAG=.*|PATCH_VBMETA_FLAG=0;|' anykernel.sh
+          else
+            # 老版本 AK3 没有这个键，插在加载核心脚本那一行之前（放文件末尾不会生效）
+            sed -i '/^\. tools\/ak3-core\.sh/i PATCH_VBMETA_FLAG=0;' anykernel.sh
+          fi
+          echo "[ak3] 最终关键参数："
+          grep -E '^BLOCK=|^block=|^IS_SLOT_DEVICE=|^RAMDISK_COMPRESSION=|^PATCH_VBMETA_FLAG=|^do.devicecheck=|^device.name' anykernel.sh
+
+          ZIP=$WS/AnyKernel3_lemonades_${{ env.BUILD_TIME }}.zip
+          zip -r9 "$ZIP" . -x ".git/*" -x "*~" -x "*.zip"
+          ls -lh "$ZIP"
+          echo "[ak3] 产物: $ZIP"
 
       - name: Upload artifact
         if: always()
@@ -487,6 +545,6 @@ jobs:
           name: kernel-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
           path: |
             kernel_workspace/AnyKernel3_lemonades_*.zip
-            android-kernel/out/arch/arm64/boot/
             boot-9R-new.img
+            android-kernel/out/arch/arm64/boot/
           if-no-files-found: warn
