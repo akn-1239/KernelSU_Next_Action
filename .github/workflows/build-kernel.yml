@@ -233,7 +233,7 @@ jobs:
           # 是否已手动集成钩子，缺失会直接 $(error No hooks were defined) 中断编译
           before('kernel/reboot.c', 'SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,',
           ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-          'extern int ksu_handle_sys_reboot();',
+          'extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);',
           '#endif'], 'ksu_handle_sys_reboot(magic1')
           after('kernel/reboot.c', 'int ret = 0;',
           ['#ifdef CONFIG_KSU_MANUAL_HOOK',
@@ -245,6 +245,17 @@ jobs:
         run: |
           set -e
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+
+          # ========== 0. 4.19 没有 strscpy_pad（4.20 才加入），KSU-Next 版本判断误以为存在 ==========
+          # 强制 kernel_compat.h 的 __strscpy_pad 走 strscpy+memset 回退分支
+          COMPAT=drivers/kernelsu/compat/kernel_compat.h
+          if [ -f "$COMPAT" ]; then
+            sed -i 's/^#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 222)$/#if 0/' "$COMPAT"
+            echo "[fix] patched $COMPAT -> strscpy_pad fallback"
+          else
+            echo "[warn] $COMPAT not found, skip"
+          fi
+          # =====================================================================
 
           # ========== 1. 只删 synaptics Kconfig 非法字节，保留驱动配置（必须早于任何 make） ==========
           echo "[fix] strip bad bytes in synaptics Kconfig (keep driver) ..."
