@@ -239,22 +239,16 @@ jobs:
           done
           # =====================================================================
 
-          # ========== 1.5 修复厂商内核自带 gcc-wrapper.py 的 Python2 语法 ==========
-          # 一加 sm8250 内核的 scripts/gcc-wrapper.py 用 Python2 的 print 语句，
-          # ubuntu-22.04/26.04 只有 python3，直接跑会 SyntaxError 导致 defconfig 失败，
-          # 并连带引发 'clang: no such file or directory: true'。这里就地转成 Python3 语法。
-          echo "[fix] patch gcc-wrapper.py -> python3 syntax ..."
-          for w in scripts/gcc-wrapper.py; do
-            if [ -f "$w" ]; then
-              cp -f "$w" "$w.bak"
-              LC_ALL=C sed -i -E 's/(^|[^[:alnum:]_])print([[:space:]]+.*)$/\1print(\2)/' "$w"
-              LC_ALL=C sed -i -E 's/print\(print\((.*)\)\)/print(\1)/' "$w"
-              echo "  patched: $w"
-            fi
-          done
-          # 确保 wrapper 的 shebang 能找到 python（指向 python3）
-          command -v python >/dev/null 2>&1 || sudo ln -sf "$(command -v python3)" /usr/local/bin/python
-          echo "[fix] python -> $(python --version 2>&1)"
+          # ========== 1.5 处理 gcc-wrapper.py：不改写它，改为让它不被调用 ==========
+          # 一加 sm8250 内核的 scripts/gcc-wrapper.py 是 Python2 语法，ubuntu 只有 python3，
+          # 直接跑会 SyntaxError；之前用 sed 就地改会把脚本改坏，反而触发
+          # "gcc-version.sh: printf: Is/your/PATH 期望数字" 与 init/Kconfig 语法错误。
+          # 正确做法：LLVM=1 用 clang 编译时 GCC 插件(GCC_PLUGINS)本就必须关闭，
+          # gcc-wrapper.py 只在插件启用时才跑，关掉插件即根治。这里先恢复被改坏的文件。
+          if [ -f scripts/gcc-wrapper.py.bak ]; then
+            mv -f scripts/gcc-wrapper.py.bak scripts/gcc-wrapper.py
+            echo "[fix] restored scripts/gcc-wrapper.py from .bak"
+          fi
           # =====================================================================
 
           # ========== 2. 工具链：LLVM 模式，防回退到系统 clang-12 ==========
@@ -286,6 +280,13 @@ jobs:
               -e KSU_SUSFS_SUS_MAP -e KSU_SUSFS_SUS_PATH
           fi
           [ "$DISABLE_CC_WERROR" = "true" ] && ./scripts/config --file out/.config --disable CC_WERROR
+          # 用 clang(LLVM=1) 编译时 GCC 插件不支持，必须全关：否则会调用 Python2 的
+          # gcc-wrapper.py，触发 SyntaxError / gcc-version.sh printf / init/Kconfig 报错
+          echo "[cfg] disable GCC plugins (required for LLVM/clang build)"
+          ./scripts/config --file out/.config --disable GCC_PLUGINS \
+            --disable GCC_PLUGIN_RANDSTRUCT --disable GCC_PLUGIN_LATENT_ENTROPY \
+            --disable GCC_PLUGIN_STRUCTLEAK --disable GCC_PLUGIN_STRUCTLEAK_BYREF_ALL \
+            --disable GCC_PLUGIN_STACKLEAK --disable GCC_PLUGIN_RANDSTRUCT_PERFORMANCE || true
           # 改完开关后再跑一次 olddefconfig 吸收改动，仍非交互
           make $MAKE_ARGS olddefconfig < /dev/null || true
           # =====================================================================
