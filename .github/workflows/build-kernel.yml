@@ -117,113 +117,132 @@ jobs:
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
           patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || echo "部分 hunk 冲突，下一步修复"
         fi
-
     - name: Fix SUSFS patch rejects
       if: env.ENABLE_SUSFS == 'true' && env.APPLY_SUSFS_PATCH == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         python3 - <<'PYEOF'
-        import re, sys
+        import sys
+        NL = chr(10)
+        TB = chr(9)
+        BS = chr(92)
 
         def read(p):
-            with open(p, 'r', errors='surrogateescape') as f:
-                return f.read()
+            f = open(p, 'r', errors='surrogateescape')
+            s = f.read()
+            f.close()
+            return s
 
         def write(p, s):
-            with open(p, 'w', errors='surrogateescape') as f:
-                f.write(s)
+            f = open(p, 'w', errors='surrogateescape')
+            f.write(s)
+            f.close()
 
-        def fix(path, pattern, block, skip, after=False):
+        def before(path, find_str, lines, skip):
             s = read(path)
             if skip in s:
                 print('[SKIP]', path)
                 return
-            m = re.search(pattern, s)
-            if m is None:
-                print('[FAIL]', path, '| anchor not found:', pattern)
+            i = s.find(find_str)
+            if i < 0:
+                print('[FAIL]', path, '| not found:', find_str)
                 sys.exit(1)
-            if after:
-                s = s[:m.end()] + '\n' + block + s[m.end():]
-            else:
-                pos = s.rfind('\n', 0, m.start()) + 1
-                s = s[:pos] + block + '\n' + s[pos:]
+            pos = s.rfind(NL, 0, i) + 1
+            s = s[:pos] + NL.join(lines) + NL + s[pos:]
             write(path, s)
             print('[OK]', path)
 
-        fix('include/linux/sched.h',
-            r'struct mutex\s+futex_exit_mutex;',
-            '#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_task_state;\n\tu64 susfs_last_fake_mnt_id;\n#endif',
+        def after(path, find_str, lines, skip):
+            s = read(path)
+            if skip in s:
+                print('[SKIP]', path)
+                return
+            i = s.find(find_str)
+            if i < 0:
+                print('[FAIL]', path, '| not found:', find_str)
+                sys.exit(1)
+            j = i + len(find_str)
+            s = s[:j] + NL + NL.join(lines) + s[j:]
+            write(path, s)
+            print('[OK]', path)
+
+        before('include/linux/sched.h', 'futex_exit_mutex;',
+            ['#ifdef CONFIG_KSU_SUSFS',
+             TB + 'u64 susfs_task_state;',
+             TB + 'u64 susfs_last_fake_mnt_id;',
+             '#endif'],
             'u64 susfs_task_state;')
 
-        fix('include/linux/mount.h',
-            r'int\s+mnt_flags;',
-            '#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_mnt_id_backup;\n#endif',
-            'u64 susfs_mnt_id_backup;',
-            after=True)
+        after('include/linux/mount.h', 'mnt_flags;',
+            ['#ifdef CONFIG_KSU_SUSFS',
+             TB + 'u64 susfs_mnt_id_backup;',
+             '#endif'],
+            'u64 susfs_mnt_id_backup;')
 
-        fix('fs/namei.c',
-            r'#include "internal\.h"',
-            '#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux/susfs_def.h>\n#endif',
+        before('fs/namei.c', '#include "internal.h"',
+            ['#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)',
+             '#include <linux/susfs_def.h>',
+             '#endif'],
             'linux/susfs_def.h')
 
-        fix('fs/proc/task_mmu.c',
-            r'#include <linux/uaccess\.h>',
-            '#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT\n#include <linux/susfs_def.h>\n#endif',
+        before('fs/proc/task_mmu.c', '#include <linux/uaccess.h>',
+            ['#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT',
+             '#include <linux/susfs_def.h>',
+             '#endif'],
             'linux/susfs_def.h')
 
         s = read('fs/readdir.c')
         if s.count('susfs_sus_ino_for_filldir64(ino)') >= 4:
             print('[SKIP] fs/readdir.c')
         else:
-            m = re.search(r'if \(buf->result\)\s*\n\s*return -EINVAL;', s)
-            if m is None:
+            i = s.find('if (buf->result)')
+            j = s.find('return -EINVAL;', i)
+            if i < 0 or j < 0:
                 print('[FAIL] fs/readdir.c | anchor not found')
                 sys.exit(1)
-            guard = ('#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n'
-                     '\tif (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) && susfs_sus_ino_for_filldir64(ino)) {\n'
-                     '\t\treturn 0;\n'
-                     '\t}\n'
-                     '#endif')
-            s = s[:m.end()] + '\n' + guard + s[m.end():]
+            j = j + len('return -EINVAL;')
+            guard = ['#ifdef CONFIG_KSU_SUSFS_SUS_PATH',
+                TB + 'if (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) && susfs_sus_ino_for_filldir64(ino)) {',
+                TB + TB + 'return 0;',
+                TB + '}',
+                '#endif']
+            s = s[:j] + NL + NL.join(guard) + s[j:]
             write('fs/readdir.c', s)
             print('[OK] fs/readdir.c')
 
-        fdinfo_block = (
-            "\t\tif (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) &&\n"
-            "\t\t\t\tunlikely(inode->i_state & INODE_STATE_SUS_KSTAT)) {\n"
-            "\t\t\tstruct path path;\n"
-            "\t\t\tchar *pathname = kmalloc(PAGE_SIZE, GFP_KERNEL);\n"
-            "\t\t\tchar *dpath;\n"
-            "\t\t\tif (!pathname) {\n"
-            "\t\t\t\tgoto out_seq_printf;\n"
-            "\t\t\t}\n"
-            "\t\t\tdpath = d_path(&file->f_path, pathname, PAGE_SIZE);\n"
-            "\t\t\tif (!dpath) {\n"
-            "\t\t\t\tgoto out_free_pathname;\n"
-            "\t\t\t}\n"
-            "\t\t\tif (kern_path(dpath, 0, &path)) {\n"
-            "\t\t\t\tgoto out_free_pathname;\n"
-            "\t\t\t}\n"
-            "\t\t\tseq_printf(m, \"inotify wd:%x ino:%lx sdev:%x mask:%x ignored_mask:0 \",\n"
-            "\t\t\t   inode_mark->wd, path.dentry->d_inode->i_ino, path.dentry->d_inode->i_sb->s_dev,\n"
-            "\t\t\t   inotify_mark_user_mask(mark));\n"
-            "\t\t\tshow_mark_fhandle(m, path.dentry->d_inode);\n"
-            "\t\t\tseq_putc(m, '\\n');\n"
-            "\t\t\tiput(inode);\n"
-            "\t\t\tpath_put(&path);\n"
-            "\t\t\tkfree(pathname);\n"
-            "\t\t\treturn;\n"
-            "\t\tout_free_pathname:\n"
-            "\t\t\tkfree(pathname);\n"
-            "\t\t}\n"
-            "out_seq_printf:")
+        fdi = ['#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT',
+            TB + TB + 'if (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) &&',
+            TB + TB + TB + TB + 'unlikely(inode->i_state & INODE_STATE_SUS_KSTAT)) {',
+            TB + TB + TB + 'struct path path;',
+            TB + TB + TB + 'char *pathname = kmalloc(PAGE_SIZE, GFP_KERNEL);',
+            TB + TB + TB + 'char *dpath;',
+            TB + TB + TB + 'if (!pathname) {',
+            TB + TB + TB + TB + 'goto out_seq_printf;',
+            TB + TB + TB + '}',
+            TB + TB + TB + 'dpath = d_path(&file->f_path, pathname, PAGE_SIZE);',
+            TB + TB + TB + 'if (!dpath) {',
+            TB + TB + TB + TB + 'goto out_free_pathname;',
+            TB + TB + TB + '}',
+            TB + TB + TB + 'if (kern_path(dpath, 0, &path)) {',
+            TB + TB + TB + TB + 'goto out_free_pathname;',
+            TB + TB + TB + '}',
+            TB + TB + TB + 'seq_printf(m, "inotify wd:%x ino:%lx sdev:%x mask:%x ignored_mask:0 ",',
+            TB + TB + TB + TB + TB + TB + 'inode_mark->wd, path.dentry->d_inode->i_ino, path.dentry->d_inode->i_sb->s_dev,',
+            TB + TB + TB + TB + TB + TB + 'inotify_mark_user_mask(mark));',
+            TB + TB + TB + 'show_mark_fhandle(m, path.dentry->d_inode);',
+            TB + TB + TB + "seq_putc(m, '" + BS + "n');",
+            TB + TB + TB + 'iput(inode);',
+            TB + TB + TB + 'path_put(&path);',
+            TB + TB + TB + 'kfree(pathname);',
+            TB + TB + TB + 'return;',
+            TB + TB + 'out_free_pathname:',
+            TB + TB + TB + 'kfree(pathname);',
+            TB + TB + '}',
+            TB + TB + 'out_seq_printf:',
+            '#endif']
 
-        fix('fs/notify/fdinfo.c',
-            r'seq_printf\(m, "inotify wd:%x',
-            fdinfo_block,
-            'out_seq_printf:')
-        PYEOF
-
+        before('fs/notify/fdinfo.c', 'seq_printf(m, "i
+    
     - name: Setup Configuration for Kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
