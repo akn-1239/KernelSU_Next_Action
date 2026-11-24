@@ -448,6 +448,10 @@ jobs:
           sed -i 's|^device.name1=.*|device.name1=lemonades|' anykernel.sh
           sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
           sed -i 's|^is_slot_device=.*|is_slot_device=auto;|' anykernel.sh
+          # 9R 在 OOS11 上报 ro.product.device=OnePlus9R，与 codename lemonades 不一致会被 AK3 拒绝
+          sed -i 's|^do.devicecheck=.*|do.devicecheck=0;|' anykernel.sh
+          grep -q '^do.devicecheck=' anykernel.sh || sed -i '/^device.name1=/i do.devicecheck=0;' anykernel.sh
+          sed -i 's|^device.name1=.*|device.name1=lemonades\ndevice.name2=OnePlus9R|' anykernel.sh
           echo "[ak3] anykernel.sh 关键参数："
           grep -E '^kernel.string=|^device.name1=|^block=|^is_slot_device=' anykernel.sh
           ZIP=$GITHUB_WORKSPACE/kernel_workspace/AnyKernel3_lemonades_${{ env.BUILD_TIME }}.zip
