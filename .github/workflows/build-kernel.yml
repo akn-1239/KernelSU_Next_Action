@@ -419,10 +419,70 @@ jobs:
           echo "[done] 产物："
           ls -l out/arch/arm64/boot/ || true
 
+      - name: Check a kernel output files
+        run: |
+          set -e
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          echo "[check] out/arch/arm64/boot 目录内容："
+          ls -lh out/arch/arm64/boot/ || { echo "[error] 输出目录不存在，编译未产出"; exit 1; }
+          for f in Image; do
+            if [ -f "out/arch/arm64/boot/$f" ]; then
+              echo "[ok] $f 大小: $(stat -c%s out/arch/arm64/boot/$f) bytes"
+            else
+              echo "[error] 缺少 $f，终止"; exit 1
+            fi
+          done
+          echo "[check] dtb/dtbo 产出（若有）："
+          ls -lh out/arch/arm64/boot/dts/qcom/*.dtb 2>/dev/null | tail -5 || echo "  无独立 dtb（已并入 Image）"
+
+      - name: Make Anykernel3
+        run: |
+          set -e
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          rm -rf ak3
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
+          cp android-kernel/out/arch/arm64/boot/Image ak3/Image
+          cd ak3
+          # 一加9R：lemonades / sm8250 / boot 分区
+          sed -i 's|^kernel.string=.*|kernel.string=OnePlus 9R (lemonades) 4.19 KernelSU-Next|' anykernel.sh
+          sed -i 's|^device.name1=.*|device.name1=lemonades|' anykernel.sh
+          sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
+          sed -i 's|^is_slot_device=.*|is_slot_device=auto;|' anykernel.sh
+          echo "[ak3] anykernel.sh 关键参数："
+          grep -E '^kernel.string=|^device.name1=|^block=|^is_slot_device=' anykernel.sh
+          ZIP=$GITHUB_WORKSPACE/kernel_workspace/AnyKernel3_lemonades_${{ env.BUILD_TIME }}.zip
+          zip -r9 "$ZIP" . -x ".git/*" -x "*~" -x "*.zip"
+          echo "[ak3] 产物: $ZIP"
+          ls -lh "$ZIP"
+
+      - name: Make boot image
+        run: |
+          set -e
+          cd $GITHUB_WORKSPACE
+          # 需要把原厂 boot.img 放到仓库根目录（名字必须是 boot.img）
+          if [ ! -f boot.img ]; then
+            echo "[skip] 仓库根目录没有 boot.img（原厂 boot 镜像）"
+            echo "[skip] boot 镜像打包跳过；直接用 AnyKernel3 zip 刷入即可"
+            exit 0
+          fi
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          git clone --depth=1 https://android.googlesource.com/platform/system/tools/mkbootimg mkbt
+          python3 mkbt/unpack_bootimg.py --boot_img $GITHUB_WORKSPACE/boot.img --out unpack --format mkbootimg > unpack/mkbootimg_args.txt
+          echo "[boot] 原 boot header 参数："
+          cat unpack/mkbootimg_args.txt
+          ARGS=$(tr '\n' ' ' < unpack/mkbootimg_args.txt)
+          python3 mkbt/mkbootimg.py $ARGS \
+            --kernel android-kernel/out/arch/arm64/boot/Image \
+            --output $GITHUB_WORKSPACE/boot-9R-new.img
+          ls -lh $GITHUB_WORKSPACE/boot-9R-new.img || echo "[warn] boot.img 打包失败，用 AnyKernel3 zip 刷入"
+
       - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-          path: android-kernel/out/arch/arm64/boot/
+          path: |
+            kernel_workspace/AnyKernel3_lemonades_*.zip
+            android-kernel/out/arch/arm64/boot/
+            boot-9R-new.img
           if-no-files-found: warn
