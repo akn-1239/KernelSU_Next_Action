@@ -265,8 +265,9 @@ jobs:
             exit 1
           fi
 
-          # sm8250 / 4.19 厂商树标准写法：用 LLVM=1 LLVM_IAS=1，不再手写 CC=绝对路径
-          MAKE_ARGS="O=out ARCH=$ARCH LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          # sm8250 / 4.19 厂商树：这棵树 Makefile 第413行无条件用 gcc-wrapper.py 覆盖 CC，
+          # 且 REAL_CC 只在 LLVM 为空时定义 → 绝不能传 LLVM=1，必须显式 CC=clang
+          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
           if [ "$DISABLE_LTO" = "true" ]; then
             MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
           fi
