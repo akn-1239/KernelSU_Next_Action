@@ -370,7 +370,46 @@ jobs:
 
         after('fs/stat.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;',
             ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'ksu_handle_stat(&dfd, &filename,
+             'ksu_handle_stat(&dfd, &filename, &flags);',
+             '#endif'],
+            'ksu_handle_stat(&dfd')
+
+        before('drivers/input/input.c', 'static void input_handle_event(',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'extern bool ksu_input_hook __read_mostly;',
+             'extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);',
+             '#endif'],
+            'ksu_handle_input_handle_event(&type')
+
+        after('drivers/input/input.c', 'int disposition = input_get_disposition(dev, type, code, &value);',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'if (unlikely(ksu_input_hook))',
+             'ksu_handle_input_handle_event(&type, &code, &value);',
+             '#endif'],
+            'ksu_handle_input_handle_event(&type')
+
+        before('fs/devpts/inode.c', 'void *devpts_get_priv(',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'extern int ksu_handle_devpts(struct inode *);',
+             '#endif'],
+            'ksu_handle_devpts(dentry')
+
+        s = read('fs/devpts/inode.c')
+        if 'ksu_handle_devpts(dentry' not in s:
+            i = s.find('void *devpts_get_priv(struct dentry *dentry)')
+            j = s.find('{', i)
+            if i < 0 or j < 0:
+                print('[FAIL] fs/devpts/inode.c | devpts_get_priv not found')
+                sys.exit(1)
+            j = j + 1
+            s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                'ksu_handle_devpts(dentry->d_inode);',
+                '#endif']) + s[j:]
+            write('fs/devpts/inode.c', s)
+            print('[OK] fs/devpts/inode.c')
+        else:
+            print('[SKIP] fs/devpts/inode.c')
+        PYEOF
     - name: Setup Configuration for Kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
