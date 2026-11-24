@@ -158,7 +158,10 @@ jobs:
           'extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,',
           'int *flags);',
           '#endif'], 'ksu_handle_faccessat(&dfd')
-          after('fs/open.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW;',
+          # 注意：锚点必须用 do_faccessat 内部唯一的语句。
+          # 原本用的 'unsigned int lookup_flags = LOOKUP_FOLLOW;' 在该文件里第一次出现是
+          # do_sys_truncate()（第132行），会把钩子插错函数，导致 dfd/filename/mode 未声明。
+          before('fs/open.c', 'if (mode & ~S_IRWXO)',
           ['#ifdef CONFIG_KSU_MANUAL_HOOK',
           'ksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
           '#endif'], 'ksu_handle_faccessat(&dfd')
@@ -226,6 +229,16 @@ jobs:
                   print('[SKIP] fs/devpts/inode.c')
           except FileNotFoundError:
               print('[SKIP] fs/devpts/inode.c | file not found')
+          # KernelSU-Next 的 Kbuild 用 grep "ksu_handle_sys_reboot" kernel/reboot.c 判断
+          # 是否已手动集成钩子，缺失会直接 $(error No hooks were defined) 中断编译
+          before('kernel/reboot.c', 'SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,',
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'extern int ksu_handle_sys_reboot();',
+          '#endif'], 'ksu_handle_sys_reboot(magic1')
+          after('kernel/reboot.c', 'int ret = 0;',
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);',
+          '#endif'], 'ksu_handle_sys_reboot(magic1')
           PYEOF
 
       - name: Build kernel
