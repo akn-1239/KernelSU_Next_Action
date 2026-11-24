@@ -204,16 +204,17 @@ jobs:
           set -e
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
 
-          # ========== 1. 修 synaptics Kconfig 非法字符（必须早于任何 make） ==========
-          echo "[fix] cleaning bad chars in synaptics Kconfig ..."
-          find drivers -path '*touchscreen*' -name 'Kconfig*' -print0 2>/dev/null \
-            | xargs -0 -r sed -i 's/[^\x00-\x7F]//g' || true
-          # 兜底：若前两行仍含不可打印字符，直接重写为合法占位（先备份）
+          # ========== 1. 只删 synaptics Kconfig 非法字节，保留驱动配置（必须早于任何 make） ==========
+          echo "[fix] strip bad bytes in synaptics Kconfig (keep driver) ..."
           for f in $(find drivers -path '*touchscreen*' -name 'Kconfig*' 2>/dev/null); do
-            if head -2 "$f" | LC_ALL=C grep -q '[^[:print:][:space:]]'; then
-              echo "[fix] rewriting bad Kconfig: $f"
-              [ -f "$f.bak" ] || cp "$f" "$f.bak"
-              printf '# synaptics placeholder (auto-fixed)\n' > "$f"
+            echo "[fix] clean -> $f"
+            [ -f "$f.bak" ] || cp "$f" "$f.bak"
+            # LC_ALL=C 强制按字节处理，只删 >=0x80 的非法字节，ASCII 内容全保留
+            LC_ALL=C sed -i 's/[^[:print:][:space:]]//g' "$f"
+            # 校验：清理后若仍有非 ASCII 字节，用 tr 做纯字节级兜底删除
+            if LC_ALL=C grep -q '[^[:print:][:space:]]' "$f"; then
+              echo "[warn] 仍有残留坏字节，二次兜底删除"
+              LC_ALL=C tr -d '\200-\377' < "$f.bak" > "$f"
             fi
           done
           # =====================================================================
