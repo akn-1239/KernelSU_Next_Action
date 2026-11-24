@@ -208,27 +208,9 @@ jobs:
           'if (unlikely(ksu_input_hook))',
           'ksu_handle_input_handle_event(&type, &code, &value);',
           '#endif'], 'ksu_handle_input_handle_event(&type')
-          before('fs/devpts/inode.c', 'void *devpts_get_priv(',
-          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-          'extern int ksu_handle_devpts(struct inode *);',
-          '#endif'], 'ksu_handle_devpts(dentry')
-          try:
-              s = read('fs/devpts/inode.c')
-              if 'ksu_handle_devpts(dentry' not in s:
-                  i = s.find('void *devpts_get_priv(struct dentry *dentry)')
-                  j = s.find('{', i)
-                  if i < 0 or j < 0:
-                      print('[WARN] fs/devpts/inode.c | devpts_get_priv not found (skip)')
-                  else:
-                      j = j + 1
-                      s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                      'ksu_handle_devpts(dentry->d_inode);',
-                      '#endif']) + s[j:]
-                      write('fs/devpts/inode.c', s); print('[OK] fs/devpts/inode.c')
-              else:
-                  print('[SKIP] fs/devpts/inode.c')
-          except FileNotFoundError:
-              print('[SKIP] fs/devpts/inode.c | file not found')
+          # 注意：KernelSU-Next(legacy-susfs) 源码里没有 ksu_handle_devpts 这个符号，
+          # 注入会在链接阶段报 undefined reference，故这里不再给 fs/devpts/inode.c 加钩子
+          # before('fs/devpts/inode.c', ...) 已移除
           # KernelSU-Next 的 Kbuild 用 grep "ksu_handle_sys_reboot" kernel/reboot.c 判断
           # 是否已手动集成钩子，缺失会直接 $(error No hooks were defined) 中断编译
           before('kernel/reboot.c', 'SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,',
@@ -255,6 +237,68 @@ jobs:
           else
             echo "[warn] $COMPAT not found, skip"
           fi
+          # =====================================================================
+
+          # ========== 0.5 提前给 fs/namespace.c 补 can_umount / path_umount ==========
+          # KSU-Next 的 Kbuild 也会补，但它在 drivers/kernelsu 阶段才执行，
+          # 那时 fs/namespace.o 往往已经编译完 → 链接期报 undefined reference to 'path_umount'
+          python3 - <<'NSEOF'
+          ns = 'fs/namespace.c'
+          try:
+              s = open(ns).read()
+          except FileNotFoundError:
+              print('[SKIP] namespace.c not found'); raise SystemExit
+          if 'int path_umount(' in s:
+              print('[SKIP] path_umount already present')
+          else:
+              code = '''
+          /* KernelSU-Next: umount helpers backported for 4.19 vendor tree */
+          static int can_umount(const struct path *path, int flags)
+          {
+          	struct mount *mnt = real_mount(path->mnt);
+          
+          	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+          		return -EINVAL;
+          	if (!may_mount())
+          		return -EPERM;
+          	if (path->dentry != path->mnt->mnt_root)
+          		return -EINVAL;
+          	if (!check_mnt(mnt))
+          		return -EINVAL;
+          	if (mnt->mnt.mnt_flags & MNT_LOCKED)
+          		return -EINVAL;
+          	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
+          		return -EPERM;
+          	return 0;
+          }
+          
+          int path_umount(struct path *path, int flags)
+          {
+          	struct mount *mnt = real_mount(path->mnt);
+          	int ret;
+          
+          	ret = can_umount(path, flags);
+          	if (!ret)
+          		ret = do_umount(mnt, flags);
+          	dput(path->dentry);
+          	mntput_no_expire(mnt);
+          	return ret;
+          }
+          '''
+              s = s.rstrip('\n') + '\n' + code
+              open(ns, 'w').write(s)
+              print('[OK] fs/namespace.c: added can_umount + path_umount')
+          # fs/internal.h 里补上声明
+          ih = 'fs/internal.h'
+          try:
+              t = open(ih).read()
+          except FileNotFoundError:
+              t = None
+          if t and 'int path_umount(' not in t:
+              t = t.rstrip('\n') + '\n' + 'int path_umount(struct path *path, int flags);\n'
+              open(ih, 'w').write(t)
+              print('[OK] fs/internal.h: added path_umount declaration')
+          NSEOF
           # =====================================================================
 
           # ========== 1. 只删 synaptics Kconfig 非法字节，保留驱动配置（必须早于任何 make） ==========
