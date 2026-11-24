@@ -166,7 +166,7 @@ jobs:
             write(path, s)
             print('[OK]', path)
 
-        before('include/linux/sched.h', 'futex_exit_mutex;',
+        before('include/linux/sched.h', 'randomized_struct_fields_end',
             ['#ifdef CONFIG_KSU_SUSFS',
              TB + 'u64 susfs_task_state;',
              TB + 'u64 susfs_last_fake_mnt_id;',
@@ -185,7 +185,7 @@ jobs:
              '#endif'],
             'linux/susfs_def.h')
 
-        before('fs/proc/task_mmu.c', '#include <linux/uaccess.h>',
+        before('fs/proc/task_mmu.c', '#include <linux/mm_inline.h>',
             ['#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT',
              '#include <linux/susfs_def.h>',
              '#endif'],
