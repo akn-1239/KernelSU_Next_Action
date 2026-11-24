@@ -35,7 +35,16 @@ jobs:
           echo "BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y%m%d%H%M')" >> $GITHUB_ENV
           echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!.*/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses-dev lzop lz4 ccache zip curl unzip git python3 device-tree-compiler gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses-dev lzop lz4 ccache zip curl unzip git python3 python2 python2-minimal device-tree-compiler gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          # ---- 关键：一加 sm8250 内核的 scripts/gcc-wrapper.py 是 Python2 语法，
+          #       ubuntu-22.04 的 python 指向 python3，直接跑会 SyntaxError，导致
+          #       conf/fixdep 等 host 工具编不出来 -> init/Kconfig syntax error -> defconfig 失败。
+          #       装好 python2 后把 python 指回 python2，wrapper 原样即可运行。----
+          sudo update-alternatives --install /usr/bin/python python /usr/bin/python2 1 || true
+          if [ -x /usr/bin/python2 ] && ! command -v python >/dev/null 2>&1; then
+            sudo ln -sf /usr/bin/python2 /usr/local/bin/python
+          fi
+          echo "[py] python -> $(command -v python || echo none) ; $(python --version 2>&1 | head -1)"
           mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
       - name: Download Clang Toolchain
@@ -239,16 +248,12 @@ jobs:
           done
           # =====================================================================
 
-          # ========== 1.5 处理 gcc-wrapper.py：不改写它，改为让它不被调用 ==========
-          # 一加 sm8250 内核的 scripts/gcc-wrapper.py 是 Python2 语法，ubuntu 只有 python3，
-          # 直接跑会 SyntaxError；之前用 sed 就地改会把脚本改坏，反而触发
-          # "gcc-version.sh: printf: Is/your/PATH 期望数字" 与 init/Kconfig 语法错误。
-          # 正确做法：LLVM=1 用 clang 编译时 GCC 插件(GCC_PLUGINS)本就必须关闭，
-          # gcc-wrapper.py 只在插件启用时才跑，关掉插件即根治。这里先恢复被改坏的文件。
-          if [ -f scripts/gcc-wrapper.py.bak ]; then
-            mv -f scripts/gcc-wrapper.py.bak scripts/gcc-wrapper.py
-            echo "[fix] restored scripts/gcc-wrapper.py from .bak"
-          fi
+          # ========== 1.5 gcc-wrapper.py 保持原样，绝不改写 ==========
+          # 根因：scripts/gcc-wrapper.py 是本内核的 CC 包装器（每次编译都会跑），
+          # 且是 Python2 语法。之前用 sed 就地改它会把脚本改坏，反而触发
+          # "gcc-version.sh: printf: Is/your/PATH" 与 init/Kconfig 语法错误。
+          # 正解已在依赖安装段完成：装 python2 并让 python 指向 python2，wrapper 原样运行。
+          echo "[fix] gcc-wrapper.py 保持原样，python 版本：$(python --version 2>&1 | head -1)"
           # =====================================================================
 
           # ========== 2. 工具链：LLVM 模式，防回退到系统 clang-12 ==========
