@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     name: Build Kernel by ${{ github.actor }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
@@ -237,6 +237,24 @@ jobs:
               LC_ALL=C tr -d '\200-\377' < "$f.bak" > "$f"
             fi
           done
+          # =====================================================================
+
+          # ========== 1.5 修复厂商内核自带 gcc-wrapper.py 的 Python2 语法 ==========
+          # 一加 sm8250 内核的 scripts/gcc-wrapper.py 用 Python2 的 print 语句，
+          # ubuntu-22.04/26.04 只有 python3，直接跑会 SyntaxError 导致 defconfig 失败，
+          # 并连带引发 'clang: no such file or directory: true'。这里就地转成 Python3 语法。
+          echo "[fix] patch gcc-wrapper.py -> python3 syntax ..."
+          for w in scripts/gcc-wrapper.py; do
+            if [ -f "$w" ]; then
+              cp -f "$w" "$w.bak"
+              LC_ALL=C sed -i -E 's/(^|[^[:alnum:]_])print([[:space:]]+.*)$/\1print(\2)/' "$w"
+              LC_ALL=C sed -i -E 's/print\(print\((.*)\)\)/print(\1)/' "$w"
+              echo "  patched: $w"
+            fi
+          done
+          # 确保 wrapper 的 shebang 能找到 python（指向 python3）
+          command -v python >/dev/null 2>&1 || sudo ln -sf "$(command -v python3)" /usr/local/bin/python
+          echo "[fix] python -> $(python --version 2>&1)"
           # =====================================================================
 
           # ========== 2. 工具链：LLVM 模式，防回退到系统 clang-12 ==========
