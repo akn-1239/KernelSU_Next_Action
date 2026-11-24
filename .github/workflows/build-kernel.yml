@@ -172,7 +172,8 @@ jobs:
                       'if (unlikely(ksu_vfs_read_hook))',
                       'ksu_handle_vfs_read(&file, &buf, &count, &pos);',
                       '#endif']) + s[j:]
-                      write('fs/read_write.c', s); print('[OK] fs/read_write.c')
+                      write('fs/read_write.c', s)
+                      print('[OK] fs/read_write.c')
               else:
                   print('[SKIP] fs/read_write.c')
           except FileNotFoundError:
@@ -238,7 +239,7 @@ jobs:
           done
           # =====================================================================
 
-          # ========== 2. 工具链：用绝对路径，防止回退到系统 clang-12 ==========
+          # ========== 2. 工具链：LLVM 模式，防回退到系统 clang-12 ==========
           export PATH=$CLANG_PATH:$PATH
           echo "[toolchain] which clang -> $(which clang || echo none)"
           echo "[toolchain] clang version -> $($CLANG_PATH/clang --version 2>/dev/null | head -1 || echo MISSING)"
@@ -247,7 +248,8 @@ jobs:
             exit 1
           fi
 
-          MAKE_ARGS="O=out ARCH=$ARCH CC=$CLANG_PATH/clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          # sm8250 / 4.19 厂商树标准写法：用 LLVM=1 LLVM_IAS=1，不再手写 CC=绝对路径
+          MAKE_ARGS="O=out ARCH=$ARCH LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
           if [ "$DISABLE_LTO" = "true" ]; then
             MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
           fi
@@ -256,7 +258,7 @@ jobs:
           echo "[cfg] make $KERNEL_CONFIG"
           make $MAKE_ARGS $KERNEL_CONFIG
           echo "[cfg] olddefconfig (non-interactive)"
-          yes '' | make $MAKE_ARGS olddefconfig || true
+          make $MAKE_ARGS olddefconfig < /dev/null || true
           [ "$ADD_KPROBES_CONFIG"   = "true" ] && ./scripts/config --file out/.config -e KPROBES
           [ "$ADD_OVERLAYFS_CONFIG" = "true" ] && ./scripts/config --file out/.config -e OVERLAY_FS
           [ "$ENABLE_KERNELSU"      = "true" ] && ./scripts/config --file out/.config -e KSU -e KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK
@@ -267,7 +269,7 @@ jobs:
           fi
           [ "$DISABLE_CC_WERROR" = "true" ] && ./scripts/config --file out/.config --disable CC_WERROR
           # 改完开关后再跑一次 olddefconfig 吸收改动，仍非交互
-          yes '' | make $MAKE_ARGS olddefconfig || true
+          make $MAKE_ARGS olddefconfig < /dev/null || true
           # =====================================================================
 
           # ========== 4. 编译前校验：清掉会漏进 clang 命令行的非法 bool/字符串值 ==========
@@ -282,21 +284,45 @@ jobs:
             -e '/^CONFIG_/ s/="(false|no)"$/=n/' \
             out/.config
           # 修正后再跑一次 olddefconfig 吸收改动，杜绝残留值进编译参数
-          yes '' | make $MAKE_ARGS olddefconfig || true
+          make $MAKE_ARGS olddefconfig < /dev/null || true
           echo "[check] 修正后仍命中（应为空）："
           grep -nE '=(true|false|yes|no)$|="(true|false|yes|no)"$' out/.config || echo "  干净"
 
-          echo "[check] 可疑编译环境变量："
-          env | grep -iE '^(KCFLAGS|KCPPFLAGS|KAFLAGS|CC|LD|AS)=' || echo "  无"
+          echo "[check] 标志类环境变量："
+          env | grep -iE '^(KCFLAGS|KCPPFLAGS|KAFLAGS|HOSTCFLAGS|HOSTLDFLAGS|CC|LD|AS)=' || echo "  无"
+          # 无条件清掉所有可能漏进编译参数的变量（含值为 true/false 的厂商开关）
+          echo "[check] 清理污染变量 ..."
+          for v in KCFLAGS KCPPFLAGS KAFLAGS CFLAGS CPPFLAGS LDFLAGS HOSTCFLAGS HOSTLDFLAGS; do
+            printenv "$v" >/dev/null 2>&1 && echo "  unset $v (原值: $(printenv $v))"
+            unset "$v" || true
+          done
+          for v in $(env | grep -E '=(true|false)$' | cut -d= -f1); do
+            echo "  unset $v"
+            unset "$v" || true
+          done
 
           echo "[check] synaptics 残留非 ASCII 检查："
           find drivers -path '*touchscreen*' -name 'Kconfig*' -exec sh -c 'LC_ALL=C grep -l "[^[:print:][:space:]]" "$1" 2>/dev/null && echo "  仍有问题: $1"' _ {} \; || echo "  干净"
           # ===================================================================
 
+          # ========== 4.5 定位 'true' 来源（.config/env 已排除，只剩源码树） ==========
+          echo "[diag] ===== 谁把 true 写进了构建标志 ====="
+          echo "[diag] --- Makefile / scripts 层 ---"
+          grep -rnE '(KBUILD_CFLAGS|KBUILD_HOSTCFLAGS|HOSTCFLAGS|ccflags-y|EXTRA_CFLAGS|KCFLAGS)[[:space:]]*\+?=' \
+            Makefile arch/arm64/Makefile scripts/ 2>/dev/null | grep -i 'true' || echo "  无"
+          echo "[diag] --- 源码树 mk/其他层（前 20 条） ---"
+          grep -rnE '(CFLAGS|LDFLAGS|KBUILD_)[A-Z_]*[[:space:]]*\+?=[[:space:]]*true' \
+            --include='*.mk' --include='Makefile*' --include='Kbuild' . 2>/dev/null | head -20 || echo "  无"
+          echo "[diag] --- .config 里值含 true 的项（前 20 条） ---"
+          grep -nE 'true' out/.config 2>/dev/null | grep -vE '^[^:]*:[0-9]*:#' | head -20 || echo "  无"
+          # 用 V=1 只编失败目标，把真实 clang 命令行打出来
+          echo "[diag] ===== V=1 复现 kernel/bounds.s 的完整命令行 ====="
+          make $MAKE_ARGS V=1 kernel/bounds.s 2>&1 | grep -nE 'true' | head -10 || echo "  未捕获到 true"
+          # ===================================================================
+
           # ========== 5. 正式编译 ==========
-          KCFLAGS="-Wno-error"
           echo "[build] make -j$(nproc) $KERNEL_FILE"
-          make $MAKE_ARGS KCFLAGS="$KCFLAGS" -j$(nproc) $KERNEL_FILE
+          make $MAKE_ARGS -j$(nproc) $KERNEL_FILE
           echo "[done] 产物："
           ls -l out/arch/arm64/boot/ || true
 
