@@ -241,7 +241,8 @@ jobs:
             TB + TB + 'out_seq_printf:',
             '#endif']
 
-        before('fs/notify/fdinfo.c', 'seq_printf(m, "i
+        before('fs/notify/fdinfo.c', 'seq_printf(m, "inotify wd:%x', fdi, 'out_seq_printf:')
+        PYEOF
     
     - name: Setup Configuration for Kernel
       run: |
