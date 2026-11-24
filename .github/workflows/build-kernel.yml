@@ -243,7 +243,134 @@ jobs:
 
         before('fs/notify/fdinfo.c', 'seq_printf(m, "inotify wd:%x', fdi, 'out_seq_printf:')
         PYEOF
-    
+        
+    - name: Add KernelSU manual hooks
+      if: env.ENABLE_KERNELSU == 'true'
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        python3 - <<'PYEOF'
+        import sys
+        NL = chr(10)
+
+        def read(p):
+            f = open(p, 'r', errors='surrogateescape')
+            s = f.read()
+            f.close()
+            return s
+
+        def write(p, s):
+            f = open(p, 'w', errors='surrogateescape')
+            f.write(s)
+            f.close()
+
+        def before(path, find_str, lines, skip):
+            s = read(path)
+            if skip in s:
+                print('[SKIP]', path)
+                return
+            i = s.find(find_str)
+            if i < 0:
+                print('[FAIL]', path, '| not found:', find_str)
+                sys.exit(1)
+            pos = s.rfind(NL, 0, i) + 1
+            s = s[:pos] + NL.join(lines) + NL + s[pos:]
+            write(path, s)
+            print('[OK]', path)
+
+        def after(path, find_str, lines, skip):
+            s = read(path)
+            if skip in s:
+                print('[SKIP]', path)
+                return
+            i = s.find(find_str)
+            if i < 0:
+                print('[FAIL]', path, '| not found:', find_str)
+                sys.exit(1)
+            j = i + len(find_str)
+            s = s[:j] + NL + NL.join(lines) + s[j:]
+            write(path, s)
+            print('[OK]', path)
+
+        def replace(path, find_str, lines, skip):
+            s = read(path)
+            if skip in s:
+                print('[SKIP]', path)
+                return
+            i = s.find(find_str)
+            if i < 0:
+                print('[FAIL]', path, '| not found:', find_str)
+                sys.exit(1)
+            s = s[:i] + NL.join(lines) + s[i+len(find_str):]
+            write(path, s)
+            print('[OK]', path)
+
+        before('fs/exec.c', 'static int do_execveat_common(',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'extern bool ksu_execveat_hook __read_mostly;',
+             'extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,',
+             'void *envp, int *flags);',
+             'extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,',
+             'void *argv, void *envp, int *flags);',
+             '#endif'],
+            'ksu_handle_execveat_sucompat')
+
+        replace('fs/exec.c', 'return __do_execve_file(fd, filename, argv, envp, flags, NULL);',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'if (unlikely(ksu_execveat_hook))',
+             'ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);',
+             'else',
+             'ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);',
+             '#endif',
+             'return __do_execve_file(fd, filename, argv, envp, flags, NULL);'],
+            'ksu_handle_execveat_sucompat(&fd')
+
+        before('fs/open.c', 'long do_faccessat(',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,',
+             'int *flags);',
+             '#endif'],
+            'ksu_handle_faccessat(&dfd')
+
+        after('fs/open.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW;',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'ksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
+             '#endif'],
+            'ksu_handle_faccessat(&dfd')
+
+        before('fs/read_write.c', 'ssize_t vfs_read(struct file *file',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'extern bool ksu_vfs_read_hook __read_mostly;',
+             'extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,',
+             'size_t *count_ptr, loff_t **pos);',
+             '#endif'],
+            'ksu_handle_vfs_read(&file')
+
+        s = read('fs/read_write.c')
+        if 'ksu_handle_vfs_read(&file' not in s:
+            i = s.find('ssize_t vfs_read(struct file *file')
+            j = s.find('ssize_t ret;', i)
+            if i < 0 or j < 0:
+                print('[FAIL] fs/read_write.c | vfs_read body not found')
+                sys.exit(1)
+            j = j + len('ssize_t ret;')
+            s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                'if (unlikely(ksu_vfs_read_hook))',
+                'ksu_handle_vfs_read(&file, &buf, &count, &pos);',
+                '#endif']) + s[j:]
+            write('fs/read_write.c', s)
+            print('[OK] fs/read_write.c')
+        else:
+            print('[SKIP] fs/read_write.c')
+
+        before('fs/stat.c', 'int vfs_statx(',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);',
+             '#endif'],
+            'ksu_handle_stat(&dfd')
+
+        after('fs/stat.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;',
+            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+             'ksu_handle_stat(&dfd, &filename,
     - name: Setup Configuration for Kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
