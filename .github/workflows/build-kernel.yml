@@ -4,559 +4,233 @@ on:
   watch:
     types: [started]
 
-
 jobs:
   build:
     name: Build Kernel by ${{ github.actor }}
     runs-on: ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
     steps:
-    - uses: actions/checkout@v3
-    - name: Setup Configuration
-      run: |
-        echo "KERNEL_SOURCE=$(cat config.env | grep "KERNEL_SOURCE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "KERNEL_SOURCE_BRANCH=$(cat config.env | grep "KERNEL_SOURCE_BRANCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "KERNEL_CONFIG=$(cat config.env | grep "KERNEL_CONFIG" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "ARCH=$(cat config.env | grep "ARCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "KERNEL_FILE=$(cat config.env | grep "KERNEL_FILE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "CLANG_VERSION=$(cat config.env | grep "CLANG_VERSION" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "BUILD_EXTRA_COMMAND=$(cat config.env | grep "EXTRA_BUILD_COMMAND" | head -n 1 | cut -d ":" -f 2)" >> $GITHUB_ENV
-        echo "DISABLE-LTO=$(cat config.env | grep "DISABLE-LTO" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "ENABLE_KERNELSU=$(cat config.env | grep "ENABLE_KERNELSU" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "ADD_KPROBES_CONFIG=$(cat config.env | grep "ADD_KPROBES_CONFIG" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "ADD_OVERLAYFS_CONFIG=$(cat config.env | grep "ADD_OVERLAYFS_CONFIG" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "NEED_DTBO=$(cat config.env | grep "NEED_DTBO" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "MAKE_BOOT_IMAGE=$(cat config.env | grep "MAKE_BOOT_IMAGE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "_BOOT_IMAGE=$(cat config.env | grep "_BOOT_IMAGE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "DISABLE_CC_WERROR=$(cat config.env | grep "DISABLE_CC_WERROR" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "APPLY_KSU_PATCH=$(cat config.env | grep "APPLY_KSU_PATCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "ENABLE_SUSFS=$(cat config.env | grep "ENABLE_SUSFS" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "APPLY_SUSFS_PATCH=$(cat config.env | grep "APPLY_SUSFS_PATCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "SUSFS_SOURCE_BRANCH=$(cat config.env | grep "SUSFS_SOURCE_BRANCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "USE_LOCAL_SUSFS_PATCH=$(cat config.env | grep "USE_LOCAL_SUSFS_PATCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "ADD_SUSFS_CONFIG=$(cat config.env | grep "ADD_SUSFS_CONFIG" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        echo "SOURCE_BOOT_IMAGE=$(cat config.env | grep "SOURCE_BOOT_IMAGE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
-        
-    - name: Setup build kernel environment
-      run: |
-        echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
-        echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
-        sudo apt-get update
-        sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses-dev lzop lz4 ccache zip curl unzip git python3 device-tree-compiler gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+      - uses: actions/checkout@v3
 
-        mkdir -p $GITHUB_WORKSPACE/kernel_workspace
+      - name: Setup Configuration
+        run: |
+          val() { grep -m1 "^$1=" config.env | cut -d= -f2-; }
+          echo "KERNEL_SOURCE=$(val KERNEL_SOURCE)" >> $GITHUB_ENV
+          echo "KERNEL_SOURCE_BRANCH=$(val KERNEL_SOURCE_BRANCH)" >> $GITHUB_ENV
+          echo "KERNEL_CONFIG=$(val KERNEL_CONFIG)" >> $GITHUB_ENV
+          echo "ARCH=$(val ARCH)" >> $GITHUB_ENV
+          echo "KERNEL_FILE=$(val KERNEL_FILE)" >> $GITHUB_ENV
+          echo "DISABLE_LTO=$(val DISABLE_LTO)" >> $GITHUB_ENV
+          echo "ENABLE_KERNELSU=$(val ENABLE_KERNELSU)" >> $GITHUB_ENV
+          echo "ENABLE_SUSFS=$(val ENABLE_SUSFS)" >> $GITHUB_ENV
+          echo "ADD_KPROBES_CONFIG=$(val ADD_KPROBES_CONFIG)" >> $GITHUB_ENV
+          echo "ADD_OVERLAYFS_CONFIG=$(val ADD_OVERLAYFS_CONFIG)" >> $GITHUB_ENV
+          echo "ADD_SUSFS_CONFIG=$(val ADD_SUSFS_CONFIG)" >> $GITHUB_ENV
+          echo "DISABLE_CC_WERROR=$(val DISABLE_CC_WERROR)" >> $GITHUB_ENV
+          echo "MAKE_BOOT_IMAGE=$(val MAKE_BOOT_IMAGE)" >> $GITHUB_ENV
 
-    - name: Download Clang Toolchain
-      run: |
-        mkdir clang
-        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r1/clang-r416183b.tar.gz
-        tar -C clang/ -zxf clang-r416183b.tar.gz
+      - name: Setup build environment
+        run: |
+          echo "BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y%m%d%H%M')" >> $GITHUB_ENV
+          echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!.*/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses-dev lzop lz4 ccache zip curl unzip git python3 device-tree-compiler gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
-    - name: Download mkbootimg tools
-      if: env.MAKE_BOOT_IMAGE == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone https://android.googlesource.com/platform/system/tools/mkbootimg tools -b master-kernel-build-2022 --depth=1
-        mkdir gcc-aosp
-        wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/606f80986096476912e04e5c2913685a8f2c3b65.tar.gz
-        tar -C gcc-aosp/ -zxvf 606f80986096476912e04e5c2913685a8f2c3b65.tar.gz
+      - name: Download Clang Toolchain
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          mkdir clang
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r1/clang-r416183b.tar.gz
+          tar -C clang/ -zxf clang-r416183b.tar.gz
+          echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CLANG_PATH=$GITHUB_WORKSPACE/kernel_workspace/clang/bin" >> $GITHUB_ENV
 
-    - name: Download kernel source
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        echo "正在下载完整内核源码..."
-        wget -O kernel.zip https://github.com/LineageOS/android_kernel_oneplus_sm8250/archive/refs/heads/lineage-18.1.zip
-        echo "下载完成，正在解压..."
-        unzip -q kernel.zip
-        mv android_kernel_oneplus_sm8250-lineage-18.1 android-kernel
-        
+      - name: Download kernel source
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          echo "Cloning ${{ env.KERNEL_SOURCE }} (${{ env.KERNEL_SOURCE_BRANCH }}) ..."
+          git clone --depth=1 -b ${{ env.KERNEL_SOURCE_BRANCH }} ${{ env.KERNEL_SOURCE }} android-kernel
 
-    - name: Download source boot image
-      if: env.MAKE_BOOT_IMAGE == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        wget -O boot-source.img ${{ env.SOURCE_BOOT_IMAGE }}
-        if [ -f boot-source.img ]; then
-            echo "FORMAT_MKBOOTING=$(echo `tools/unpack_bootimg.py --boot_img=boot-source.img --format mkbootimg`)" >> $GITHUB_ENV
-            echo "HAVE_SOURCE_BOOT_IMAGE=true" >> $GITHUB_ENV
-        else
-            echo "Source boot image is empty"
-        fi
-  
-    - name: Setup KernelSU Next
-      if: env.ENABLE_KERNELSU == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel || exit 1
-        if [ ! -d "drivers" ]; then
-           echo " 致命错误: 当前目录下找不到 drivers 文件夹！源码不完整！"
-           exit 1
-        fi
-        wget -O ksu.zip https://github.com/wshamroukh/KernelSU-Next-SUSFS-kernelv4.19/archive/refs/heads/legacy.zip
-        unzip ksu.zip
-        mv KernelSU-Next-SUSFS-kernelv4.19-legacy KernelSU-Next
-        ln -s $(pwd)/KernelSU-Next/kernel drivers/kernelsu
-        echo "obj-\$(CONFIG_KSU) += kernelsu/" >> drivers/Makefile
-        echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-        bash KernelSU-Next/kernel/setup.sh
-        grep -rl "#include <linux/pgtable.h>" KernelSU-Next/kernel | xargs -r sed -i 's|#include <linux/pgtable.h>|#include <asm/pgtable.h>|g'
-        grep -rl "strncpy_from_user_nofault" KernelSU-Next/kernel | xargs -r sed -i 's/strncpy_from_user_nofault/strncpy_from_unsafe/g'
-        grep -rl "copy_to_kernel_nofault" KernelSU-Next/kernel | xargs -r sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g'
-        grep -rl "copy_from_kernel_nofault" KernelSU-Next/kernel | xargs -r sed -i 's/copy_from_kernel_nofault/probe_kernel_read/g'
-        KSU_VERSION=$(cd KernelSU-Next && expr $(git rev-list --count HEAD) + 10200)
-        echo "UPLOADNAME=-KernelSU_$KSU_VERSION" >> $GITHUB_ENV
+      # 方案A：SUSFS 已内嵌进 KernelSU-Next，删除原 susfs4ksu 补丁与 Fix SUSFS patch rejects 步骤
 
-    - name: Setup SuSFS
-      if: env.ENABLE_SUSFS == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone https://gitlab.com/simonpunk/susfs4ksu.git -b ${{ env.SUSFS_SOURCE_BRANCH }} susfs4ksu --depth=1
-        cd $GITHUB_WORKSPACE/kernel_workspace/susfs4ksu
-        cp ./kernel_patches/fs/* $GITHUB_WORKSPACE/kernel_workspace/android-kernel/fs/
-        cp ./kernel_patches/include/linux/* $GITHUB_WORKSPACE/kernel_workspace/android-kernel/include/linux/
-        if [ ${{env.APPLY_SUSFS_PATCH}} = true ]; then
+      - name: Setup KernelSU-Next (standalone SUSFS)
+        if: env.ENABLE_KERNELSU == 'true'
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel || exit 1
+          if [ ! -d "drivers" ]; then
+            echo "致命错误: 当前目录找不到 drivers 文件夹，源码不完整！"
+            exit 1
+          fi
+          # legacy-susfs 分支：SUSFS 作为自包含驱动集成，无需手动打 fs 补丁
+          git clone --depth=1 -b legacy-susfs https://github.com/Youffx/KernelSU-Next.git kernelsu_src
+          ln -sfn $(pwd)/kernelsu_src/kernel drivers/kernelsu
+          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          bash kernelsu_src/kernel/setup.sh
+          # 4.19 内核 API 适配
+          grep -rl "#include <linux/pgtable.h>" kernelsu_src/kernel | xargs -r sed -i 's|#include <linux/pgtable.h>|#include <asm/pgtable.h>|g'
+          grep -rl "strncpy_from_user_nofault" kernelsu_src/kernel | xargs -r sed -i 's/strncpy_from_user_nofault/strncpy_from_unsafe/g'
+          grep -rl "copy_to_kernel_nofault" kernelsu_src/kernel | xargs -r sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g'
+          grep -rl "copy_from_kernel_nofault" kernelsu_src/kernel | xargs -r sed -i 's/copy_from_kernel_nofault/probe_kernel_read/g'
+          KSU_VERSION=$(cd kernelsu_src && expr $(git rev-list --count HEAD) + 10200)
+          echo "UPLOADNAME=-KernelSU-Next_$KSU_VERSION" >> $GITHUB_ENV
+
+      - name: Add KernelSU manual hooks
+        if: env.ENABLE_KERNELSU == 'true'
+        run: |
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || echo "部分 hunk 冲突，下一步修复"
-        fi
-    - name: Fix SUSFS patch rejects
-      if: env.ENABLE_SUSFS == 'true' && env.APPLY_SUSFS_PATCH == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        python3 - <<'PYEOF'
-        import sys
-        NL = chr(10)
-        TB = chr(9)
-        BS = chr(92)
+          python3 - <<'PYEOF'
+          import sys
+          NL = chr(10)
+          def read(p):
+              f = open(p, 'r', errors='surrogateescape'); s = f.read(); f.close(); return s
+          def write(p, s):
+              f = open(p, 'w', errors='surrogateescape'); f.write(s); f.close()
+          def before(path, find_str, lines, skip):
+              s = read(path)
+              if skip in s:
+                  print('[SKIP]', path); return
+              i = s.find(find_str)
+              if i < 0:
+                  print('[FAIL]', path, '| not found:', find_str); sys.exit(1)
+              pos = s.rfind(NL, 0, i) + 1
+              s = s[:pos] + NL.join(lines) + NL + s[pos:]
+              write(path, s); print('[OK]', path)
+          def after(path, find_str, lines, skip):
+              s = read(path)
+              if skip in s:
+                  print('[SKIP]', path); return
+              i = s.find(find_str)
+              if i < 0:
+                  print('[FAIL]', path, '| not found:', find_str); sys.exit(1)
+              j = i + len(find_str)
+              s = s[:j] + NL + NL.join(lines) + s[j:]
+              write(path, s); print('[OK]', path)
+          def replace(path, find_str, lines, skip):
+              s = read(path)
+              if skip in s:
+                  print('[SKIP]', path); return
+              i = s.find(find_str)
+              if i < 0:
+                  print('[FAIL]', path, '| not found:', find_str); sys.exit(1)
+              s = s[:i] + NL.join(lines) + s[i+len(find_str):]
+              write(path, s); print('[OK]', path)
+          TB = chr(9)
+          before('fs/exec.c', 'static int do_execveat_common(',
+                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                  'extern bool ksu_execveat_hook __read_mostly;',
+                  'extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,',
+                  'void *envp, int *flags);',
+                  'extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,',
+                  'void *argv, void *envp, int *flags);',
+                  '#endif'], 'ksu_handle_execveat_sucompat')
+          replace('fs/exec.c', 'return __do_execve_file(fd, filename, argv, envp, flags, NULL);',
+                  ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                   'if (unlikely(ksu_execveat_hook))',
+                   'ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);',
+                   'else',
+                   'ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);',
+                   '#endif',
+                   'return __do_execve_file(fd, filename, argv, envp, flags, NULL);'],
+                  'ksu_handle_execveat_sucompat(&fd')
+          before('fs/open.c', 'long do_faccessat(',
+                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                  'extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,',
+                  'int *flags);',
+                  '#endif'], 'ksu_handle_faccessat(&dfd')
+          after('fs/open.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW;',
+                ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                 'ksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
+                 '#endif'], 'ksu_handle_faccessat(&dfd')
+          before('fs/read_write.c', 'ssize_t vfs_read(struct file *file',
+                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                  'extern bool ksu_vfs_read_hook __read_mostly;',
+                  'extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,',
+                  'size_t *count_ptr, loff_t **pos);',
+                  '#endif'], 'ksu_handle_vfs_read(&file')
+          s = read('fs/read_write.c')
+          if 'ksu_handle_vfs_read(&file' not in s:
+              i = s.find('ssize_t vfs_read(struct file *file')
+              j = s.find('ssize_t ret;', i)
+              if i < 0 or j < 0:
+                  print('[FAIL] fs/read_write.c | vfs_read body not found'); sys.exit(1)
+              j = j + len('ssize_t ret;')
+              s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                  'if (unlikely(ksu_vfs_read_hook))',
+                  'ksu_handle_vfs_read(&file, &buf, &count, &pos);',
+                  '#endif']) + s[j:]
+              write('fs/read_write.c', s); print('[OK] fs/read_write.c')
+          else:
+              print('[SKIP] fs/read_write.c')
+          before('fs/stat.c', 'int vfs_statx(',
+                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                  'extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);',
+                  '#endif'], 'ksu_handle_stat(&dfd')
+          after('fs/stat.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;',
+                ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                 'ksu_handle_stat(&dfd, &filename, &flags);',
+                 '#endif'], 'ksu_handle_stat(&dfd')
+          before('drivers/input/input.c', 'static void input_handle_event(',
+                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                  'extern bool ksu_input_hook __read_mostly;',
+                  'extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);',
+                  '#endif'], 'ksu_handle_input_handle_event(&type')
+          after('drivers/input/input.c', 'int disposition = input_get_disposition(dev, type, code, &value);',
+                ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                 'if (unlikely(ksu_input_hook))',
+                 'ksu_handle_input_handle_event(&type, &code, &value);',
+                 '#endif'], 'ksu_handle_input_handle_event(&type')
+          before('fs/devpts/inode.c', 'void *devpts_get_priv(',
+                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                  'extern int ksu_handle_devpts(struct inode *);',
+                  '#endif'], 'ksu_handle_devpts(dentry')
+          s = read('fs/devpts/inode.c')
+          if 'ksu_handle_devpts(dentry' not in s:
+              i = s.find('void *devpts_get_priv(struct dentry *dentry)')
+              j = s.find('{', i)
+              if i < 0 or j < 0:
+                  print('[FAIL] fs/devpts/inode.c | devpts_get_priv not found'); sys.exit(1)
+              j = j + 1
+              s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                  'ksu_handle_devpts(dentry->d_inode);',
+                  '#endif']) + s[j:]
+              write('fs/devpts/inode.c', s); print('[OK] fs/devpts/inode.c')
+          else:
+              print('[SKIP] fs/devpts/inode.c')
+          PYEOF
 
-        def read(p):
-            f = open(p, 'r', errors='surrogateescape')
-            s = f.read()
-            f.close()
-            return s
+      - name: Build kernel
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          # 修复 synaptics Kconfig 非法字符导致的解析中断
+          find drivers -path '*touchscreen*' -name Kconfig -exec sed -i 's/[^[:print:][:space:]]//g' {} \; 2>/dev/null || true
+          export PATH=$CLANG_PATH:$PATH
+          MAKE_ARGS="O=out ARCH=$ARCH CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          if [ "$DISABLE_LTO" = "true" ]; then
+            MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
+          fi
+          # 真正关闭 Werror，避免 warning 被当成 error
+          KCFLAGS="-Wno-error"
+          make $MAKE_ARGS $KERNEL_CONFIG
+          if [ "$ADD_KPROBES_CONFIG" = "true" ]; then ./scripts/config --file out/.config -e KPROBES; fi
+          if [ "$ADD_OVERLAYFS_CONFIG" = "true" ]; then ./scripts/config --file out/.config -e OVERLAY_FS; fi
+          if [ "$ENABLE_KERNELSU" = "true" ]; then ./scripts/config --file out/.config -e KSU -e KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK; fi
+          if [ "$ENABLE_SUSFS" = "true" ]; then
+            ./scripts/config --file out/.config -e KSU_SUSFS -e KSU_SUSFS_SUS_MOUNT -e KSU_SUSFS_SUS_KSTAT \
+              -e KSU_SUSFS_SPOOF_UNAME -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS -e KSU_SUSFS_OPEN_REDIRECT \
+              -e KSU_SUSFS_SUS_MAP -e KSU_SUSFS_SUS_PATH
+          fi
+          if [ "$DISABLE_LTO" = "name" ]; then :; fi
+          if [ "$DISABLE_CC_WERROR" = "true" ]; then ./scripts/config --file out/.config --disable CC_WERROR; fi
+          make $MAKE_ARGS KCFLAGS="$KCFLAGS" -j$(nproc) $KERNEL_FILE
+          echo "done"
 
-        def write(p, s):
-            f = open(p, 'w', errors='surrogateescape')
-            f.write(s)
-            f.close()
+      - name: Upload artifact
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          ls -l out/arch/arm64/boot/ || true
+        # 需要产物时把上面 make 目标换成 Image.gz 并启用 MAKE_BOOT_IMAGE 步骤打包 boot.img
 
-        def before(path, find_str, lines, skip):
-            s = read(path)
-            if skip in s:
-                print('[SKIP]', path)
-                return
-            i = s.find(find_str)
-            if i < 0:
-                print('[FAIL]', path, '| not found:', find_str)
-                sys.exit(1)
-            pos = s.rfind(NL, 0, i) + 1
-            s = s[:pos] + NL.join(lines) + NL + s[pos:]
-            write(path, s)
-            print('[OK]', path)
-
-        def after(path, find_str, lines, skip):
-            s = read(path)
-            if skip in s:
-                print('[SKIP]', path)
-                return
-            i = s.find(find_str)
-            if i < 0:
-                print('[FAIL]', path, '| not found:', find_str)
-                sys.exit(1)
-            j = i + len(find_str)
-            s = s[:j] + NL + NL.join(lines) + s[j:]
-            write(path, s)
-            print('[OK]', path)
-
-        before('include/linux/sched.h', 'randomized_struct_fields_end',
-            ['#ifdef CONFIG_KSU_SUSFS',
-             TB + 'u64 susfs_task_state;',
-             TB + 'u64 susfs_last_fake_mnt_id;',
-             '#endif'],
-            'u64 susfs_task_state;')
-
-        after('include/linux/mount.h', 'mnt_flags;',
-            ['#ifdef CONFIG_KSU_SUSFS',
-             TB + 'u64 susfs_mnt_id_backup;',
-             '#endif'],
-            'u64 susfs_mnt_id_backup;')
-
-        before('fs/namei.c', '#include "internal.h"',
-            ['#if defined(CONFIG_KSU_SUSFS_SUS_PATH) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)',
-             '#include <linux/susfs_def.h>',
-             '#endif'],
-            'linux/susfs_def.h')
-
-        before('fs/proc/task_mmu.c', '#include <linux/mm_inline.h>',
-            ['#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT',
-             '#include <linux/susfs_def.h>',
-             '#endif'],
-            'linux/susfs_def.h')
-
-        s = read('fs/readdir.c')
-        if s.count('susfs_sus_ino_for_filldir64(ino)') >= 4:
-            print('[SKIP] fs/readdir.c')
-        else:
-            i = s.find('if (buf->result)')
-            j = s.find('return -EINVAL;', i)
-            if i < 0 or j < 0:
-                print('[FAIL] fs/readdir.c | anchor not found')
-                sys.exit(1)
-            j = j + len('return -EINVAL;')
-            guard = ['#ifdef CONFIG_KSU_SUSFS_SUS_PATH',
-                TB + 'if (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) && susfs_sus_ino_for_filldir64(ino)) {',
-                TB + TB + 'return 0;',
-                TB + '}',
-                '#endif']
-            s = s[:j] + NL + NL.join(guard) + s[j:]
-            write('fs/readdir.c', s)
-            print('[OK] fs/readdir.c')
-
-        fdi = ['#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT',
-            TB + TB + 'if (likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC) &&',
-            TB + TB + TB + TB + 'unlikely(inode->i_state & INODE_STATE_SUS_KSTAT)) {',
-            TB + TB + TB + 'struct path path;',
-            TB + TB + TB + 'char *pathname = kmalloc(PAGE_SIZE, GFP_KERNEL);',
-            TB + TB + TB + 'char *dpath;',
-            TB + TB + TB + 'if (!pathname) {',
-            TB + TB + TB + TB + 'goto out_seq_printf;',
-            TB + TB + TB + '}',
-            TB + TB + TB + 'dpath = d_path(&file->f_path, pathname, PAGE_SIZE);',
-            TB + TB + TB + 'if (!dpath) {',
-            TB + TB + TB + TB + 'goto out_free_pathname;',
-            TB + TB + TB + '}',
-            TB + TB + TB + 'if (kern_path(dpath, 0, &path)) {',
-            TB + TB + TB + TB + 'goto out_free_pathname;',
-            TB + TB + TB + '}',
-            TB + TB + TB + 'seq_printf(m, "inotify wd:%x ino:%lx sdev:%x mask:%x ignored_mask:0 ",',
-            TB + TB + TB + TB + TB + TB + 'inode_mark->wd, path.dentry->d_inode->i_ino, path.dentry->d_inode->i_sb->s_dev,',
-            TB + TB + TB + TB + TB + TB + 'inotify_mark_user_mask(mark));',
-            TB + TB + TB + 'show_mark_fhandle(m, path.dentry->d_inode);',
-            TB + TB + TB + "seq_putc(m, '" + BS + "n');",
-            TB + TB + TB + 'iput(inode);',
-            TB + TB + TB + 'path_put(&path);',
-            TB + TB + TB + 'kfree(pathname);',
-            TB + TB + TB + 'return;',
-            TB + TB + 'out_free_pathname:',
-            TB + TB + TB + 'kfree(pathname);',
-            TB + TB + '}',
-            TB + TB + 'out_seq_printf:',
-            '#endif']
-
-        before('fs/notify/fdinfo.c', 'seq_printf(m, "inotify wd:%x', fdi, 'out_seq_printf:')
-        PYEOF
-        
-    - name: Add KernelSU manual hooks
-      if: env.ENABLE_KERNELSU == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        python3 - <<'PYEOF'
-        import sys
-        NL = chr(10)
-
-        def read(p):
-            f = open(p, 'r', errors='surrogateescape')
-            s = f.read()
-            f.close()
-            return s
-
-        def write(p, s):
-            f = open(p, 'w', errors='surrogateescape')
-            f.write(s)
-            f.close()
-
-        def before(path, find_str, lines, skip):
-            s = read(path)
-            if skip in s:
-                print('[SKIP]', path)
-                return
-            i = s.find(find_str)
-            if i < 0:
-                print('[FAIL]', path, '| not found:', find_str)
-                sys.exit(1)
-            pos = s.rfind(NL, 0, i) + 1
-            s = s[:pos] + NL.join(lines) + NL + s[pos:]
-            write(path, s)
-            print('[OK]', path)
-
-        def after(path, find_str, lines, skip):
-            s = read(path)
-            if skip in s:
-                print('[SKIP]', path)
-                return
-            i = s.find(find_str)
-            if i < 0:
-                print('[FAIL]', path, '| not found:', find_str)
-                sys.exit(1)
-            j = i + len(find_str)
-            s = s[:j] + NL + NL.join(lines) + s[j:]
-            write(path, s)
-            print('[OK]', path)
-
-        def replace(path, find_str, lines, skip):
-            s = read(path)
-            if skip in s:
-                print('[SKIP]', path)
-                return
-            i = s.find(find_str)
-            if i < 0:
-                print('[FAIL]', path, '| not found:', find_str)
-                sys.exit(1)
-            s = s[:i] + NL.join(lines) + s[i+len(find_str):]
-            write(path, s)
-            print('[OK]', path)
-
-        before('fs/exec.c', 'static int do_execveat_common(',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'extern bool ksu_execveat_hook __read_mostly;',
-             'extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,',
-             'void *envp, int *flags);',
-             'extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,',
-             'void *argv, void *envp, int *flags);',
-             '#endif'],
-            'ksu_handle_execveat_sucompat')
-
-        replace('fs/exec.c', 'return __do_execve_file(fd, filename, argv, envp, flags, NULL);',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'if (unlikely(ksu_execveat_hook))',
-             'ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);',
-             'else',
-             'ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);',
-             '#endif',
-             'return __do_execve_file(fd, filename, argv, envp, flags, NULL);'],
-            'ksu_handle_execveat_sucompat(&fd')
-
-        before('fs/open.c', 'long do_faccessat(',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,',
-             'int *flags);',
-             '#endif'],
-            'ksu_handle_faccessat(&dfd')
-
-        after('fs/open.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW;',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'ksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
-             '#endif'],
-            'ksu_handle_faccessat(&dfd')
-
-        before('fs/read_write.c', 'ssize_t vfs_read(struct file *file',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'extern bool ksu_vfs_read_hook __read_mostly;',
-             'extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,',
-             'size_t *count_ptr, loff_t **pos);',
-             '#endif'],
-            'ksu_handle_vfs_read(&file')
-
-        s = read('fs/read_write.c')
-        if 'ksu_handle_vfs_read(&file' not in s:
-            i = s.find('ssize_t vfs_read(struct file *file')
-            j = s.find('ssize_t ret;', i)
-            if i < 0 or j < 0:
-                print('[FAIL] fs/read_write.c | vfs_read body not found')
-                sys.exit(1)
-            j = j + len('ssize_t ret;')
-            s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                'if (unlikely(ksu_vfs_read_hook))',
-                'ksu_handle_vfs_read(&file, &buf, &count, &pos);',
-                '#endif']) + s[j:]
-            write('fs/read_write.c', s)
-            print('[OK] fs/read_write.c')
-        else:
-            print('[SKIP] fs/read_write.c')
-
-        before('fs/stat.c', 'int vfs_statx(',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);',
-             '#endif'],
-            'ksu_handle_stat(&dfd')
-
-        after('fs/stat.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'ksu_handle_stat(&dfd, &filename, &flags);',
-             '#endif'],
-            'ksu_handle_stat(&dfd')
-
-        before('drivers/input/input.c', 'static void input_handle_event(',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'extern bool ksu_input_hook __read_mostly;',
-             'extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);',
-             '#endif'],
-            'ksu_handle_input_handle_event(&type')
-
-        after('drivers/input/input.c', 'int disposition = input_get_disposition(dev, type, code, &value);',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'if (unlikely(ksu_input_hook))',
-             'ksu_handle_input_handle_event(&type, &code, &value);',
-             '#endif'],
-            'ksu_handle_input_handle_event(&type')
-
-        before('fs/devpts/inode.c', 'void *devpts_get_priv(',
-            ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-             'extern int ksu_handle_devpts(struct inode *);',
-             '#endif'],
-            'ksu_handle_devpts(dentry')
-
-        s = read('fs/devpts/inode.c')
-        if 'ksu_handle_devpts(dentry' not in s:
-            i = s.find('void *devpts_get_priv(struct dentry *dentry)')
-            j = s.find('{', i)
-            if i < 0 or j < 0:
-                print('[FAIL] fs/devpts/inode.c | devpts_get_priv not found')
-                sys.exit(1)
-            j = j + 1
-            s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                'ksu_handle_devpts(dentry->d_inode);',
-                '#endif']) + s[j:]
-            write('fs/devpts/inode.c', s)
-            print('[OK] fs/devpts/inode.c')
-        else:
-            print('[SKIP] fs/devpts/inode.c')
-        PYEOF
-    - name: Setup Configuration for Kernel
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-        export ARCH=${{ env.ARCH }}
-        export SUBARCH=${{ env.ARCH }}
-        export KBUILD_COMPILER_STRING="$(clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
-        export KBUILD_BUILD_HOST=Wuxin-Builds
-        export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
-        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang ${{ env.KERNEL_CONFIG }}
-        if [ ${{ env.APPLY_KSU_PATCH }} = true ]; then
-            bash $GITHUB_WORKSPACE/patches.sh
-            if grep -q "CONFIG_KSU" arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}; then
-                sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-                sed -i 's/CONFIG_KSU=n/CONFIG_KSU=y/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            else
-                echo "CONFIG_KSU=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            fi
-        fi
-        if [ ${{ env.ADD_KPROBES_CONFIG }} = true -a ${{ env.APPLY_KSU_PATCH }} != true ]; then
-            echo "CONFIG_MODULES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-        if [ ${{ env.ADD_SUSFS_CONFIG }} = true ]; then
-            echo "CONFIG_KSU=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-        if [ ${{ env.ADD_OVERLAYFS_CONFIG }} = true ]; then
-            echo "CONFIG_OVERLAY_FS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-        if [ ${{ env.DISABLE-LTO }} = true ]; then
-            sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_LTO_NONE=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        else
-            echo "LTO is Enabled"
-            echo "CONFIG_LTO=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_LTO_CLANG=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_THINLTO=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            sed -i 's/CONFIG_LTO_NONE=y/CONFIG_LTO_NONE=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-        if [ ${{ env.DISABLE_CC_WERROR }} = true ]; then
-            echo "CONFIG_CC_WERROR=n" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-
-    - name: Build kernel
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-        export ARCH=${{ env.ARCH }}
-        export SUBARCH=${{ env.ARCH }}
-        export KBUILD_COMPILER_STRING="$(clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
-        export KBUILD_BUILD_HOST=Tuesday1028
-        export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
-        sed -i 's/^CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/g' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        sed -i 's/^subdir-y += qcom$/# subdir-y += qcom/' arch/arm64/boot/dts/Makefile
-        sed -i 's/[a-zA-Z0-9_-]*dvt[a-zA-Z0-9._-]*\.dtbo//g' arch/arm64/boot/dts/vendor/qcom/Makefile
-        grep -q '^CONFIG_MODULE_SIG' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_MODULE_SIG=n' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        grep -q '^CONFIG_KPROBES=y' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }} || echo 'CONFIG_KPROBES=y' >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang ${{ env.KERNEL_CONFIG }}
-        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} CC=clang CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE=aarch64-linux-gnu- CONFIG_MODULE_SIG=n CONFIG_MODULE_SIG_ALL=n HOSTCFLAGS="-w -fcommon" DTC_EXT=dtc Image
-
-        
-    - name: Check a kernel output files
-      run: |
-       cd $GITHUB_WORKSPACE/kernel_workspace
-       if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_FILE }} ]; then
-           echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
-       else
-           echo "Kernel output file is empty"
-       fi
-       if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img ]; then
-           echo "CHECK_DTBO_IS_OK=true" >> $GITHUB_ENV
-       else
-           echo "DTBO image is empty"
-       fi
-
-    - name: Make Anykernel3
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone https://github.com/osm0sis/AnyKernel3
-        sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-        sed -i 's!block=/dev/block/by-name/boot;!block=auto;!g' AnyKernel3/anykernel.sh
-        sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
-        if [ ${{ env.CHECK_FILE_IS_OK }} = true ]; then
-            cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_FILE }} AnyKernel3/
-        elif [ ${{ env.CHECK_DTBO_IS_OK }} = true ]; then
-            cp android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img AnyKernel3/
-        fi
-        rm -rf AnyKernel3/.git* AnyKernel3/README.md
-
-    - name: Make boot image
-      if: env.HAVE_SOURCE_BOOT_IMAGE == 'true' && env.CHECK_FILE_IS_OK == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        tools/unpack_bootimg.py --boot_img boot-source.img
-        cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_FILE }} out/kernel
-        tools/mkbootimg.py ${{ env.FORMAT_MKBOOTING }} -o boot.img
-        if [ -f boot.img ]; then
-            echo "MAKE_BOOT_IMAGE_IS_OK=true" >> $GITHUB_ENV
-        else
-            echo "Boot image is empty"
-        fi
-    
-    - name: Upload ${{ env.KERNEL_FILE }}
-      if: env.CHECK_FILE_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.KERNEL_FILE }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_FILE }}
-
-    - name: Upload AnyKernel3
-      if: env.CHECK_FILE_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: AnyKernel3${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/AnyKernel3/*
-
-    - name: Upload DTBO image
-      if: env.CHECK_DTBO_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: dtbo-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/android-kernel/out/arch/${{ env.TARGET_ARCH }}/boot/dtbo.img
-
-    - name: Upload boot image
-      if: env.MAKE_BOOT_IMAGE_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: boot${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/boot.img
+      # 需要 boot.img 时取消注释：MAKE_BOOT_IMAGE=true 并补 Download mkbootimg / source boot image 步骤
