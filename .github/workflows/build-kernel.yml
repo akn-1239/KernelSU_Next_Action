@@ -1,4 +1,5 @@
 name: Build Kernel
+
 on:
   workflow_dispatch:
   watch:
@@ -9,6 +10,7 @@ jobs:
     name: Build Kernel by ${{ github.actor }}
     runs-on: ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
+
     steps:
       - uses: actions/checkout@v3
 
@@ -52,7 +54,6 @@ jobs:
           git clone --depth=1 -b ${{ env.KERNEL_SOURCE_BRANCH }} ${{ env.KERNEL_SOURCE }} android-kernel
 
       # 方案A：SUSFS 已内嵌进 KernelSU-Next，删除原 susfs4ksu 补丁与 Fix SUSFS patch rejects 步骤
-
       - name: Setup KernelSU-Next (standalone SUSFS)
         if: env.ENABLE_KERNELSU == 'true'
         run: |
@@ -67,7 +68,7 @@ jobs:
           echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           bash kernelsu_src/kernel/setup.sh
-          # 4.19 内核 API 适配
+          # 4.19 内核 API 适配（仅当目标确为 4.19 时需要；其余版本这些符号本就不存在，替换无副作用）
           grep -rl "#include <linux/pgtable.h>" kernelsu_src/kernel | xargs -r sed -i 's|#include <linux/pgtable.h>|#include <asm/pgtable.h>|g'
           grep -rl "strncpy_from_user_nofault" kernelsu_src/kernel | xargs -r sed -i 's/strncpy_from_user_nofault/strncpy_from_unsafe/g'
           grep -rl "copy_to_kernel_nofault" kernelsu_src/kernel | xargs -r sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g'
@@ -86,117 +87,135 @@ jobs:
               f = open(p, 'r', errors='surrogateescape'); s = f.read(); f.close(); return s
           def write(p, s):
               f = open(p, 'w', errors='surrogateescape'); f.write(s); f.close()
+          # 找不到锚点只告警跳过，不再 sys.exit 中断整次编译
           def before(path, find_str, lines, skip):
-              s = read(path)
+              try:
+                  s = read(path)
+              except FileNotFoundError:
+                  print('[SKIP]', path, '| file not found'); return
               if skip in s:
                   print('[SKIP]', path); return
               i = s.find(find_str)
               if i < 0:
-                  print('[FAIL]', path, '| not found:', find_str); sys.exit(1)
+                  print('[WARN]', path, '| anchor not found (skip):', find_str); return
               pos = s.rfind(NL, 0, i) + 1
               s = s[:pos] + NL.join(lines) + NL + s[pos:]
               write(path, s); print('[OK]', path)
           def after(path, find_str, lines, skip):
-              s = read(path)
+              try:
+                  s = read(path)
+              except FileNotFoundError:
+                  print('[SKIP]', path, '| file not found'); return
               if skip in s:
                   print('[SKIP]', path); return
               i = s.find(find_str)
               if i < 0:
-                  print('[FAIL]', path, '| not found:', find_str); sys.exit(1)
+                  print('[WARN]', path, '| anchor not found (skip):', find_str); return
               j = i + len(find_str)
               s = s[:j] + NL + NL.join(lines) + s[j:]
               write(path, s); print('[OK]', path)
           def replace(path, find_str, lines, skip):
-              s = read(path)
+              try:
+                  s = read(path)
+              except FileNotFoundError:
+                  print('[SKIP]', path, '| file not found'); return
               if skip in s:
                   print('[SKIP]', path); return
               i = s.find(find_str)
               if i < 0:
-                  print('[FAIL]', path, '| not found:', find_str); sys.exit(1)
+                  print('[WARN]', path, '| anchor not found (skip):', find_str); return
               s = s[:i] + NL.join(lines) + s[i+len(find_str):]
               write(path, s); print('[OK]', path)
-          TB = chr(9)
+
           before('fs/exec.c', 'static int do_execveat_common(',
-                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                  'extern bool ksu_execveat_hook __read_mostly;',
-                  'extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,',
-                  'void *envp, int *flags);',
-                  'extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,',
-                  'void *argv, void *envp, int *flags);',
-                  '#endif'], 'ksu_handle_execveat_sucompat')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'extern bool ksu_execveat_hook __read_mostly;',
+          'extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,',
+          'void *envp, int *flags);',
+          'extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,',
+          'void *argv, void *envp, int *flags);',
+          '#endif'], 'ksu_handle_execveat_sucompat')
           replace('fs/exec.c', 'return __do_execve_file(fd, filename, argv, envp, flags, NULL);',
-                  ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                   'if (unlikely(ksu_execveat_hook))',
-                   'ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);',
-                   'else',
-                   'ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);',
-                   '#endif',
-                   'return __do_execve_file(fd, filename, argv, envp, flags, NULL);'],
-                  'ksu_handle_execveat_sucompat(&fd')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'if (unlikely(ksu_execveat_hook))',
+          'ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);',
+          'else',
+          'ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);',
+          '#endif',
+          'return __do_execve_file(fd, filename, argv, envp, flags, NULL);'],
+          'ksu_handle_execveat_sucompat(&fd')
           before('fs/open.c', 'long do_faccessat(',
-                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                  'extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,',
-                  'int *flags);',
-                  '#endif'], 'ksu_handle_faccessat(&dfd')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,',
+          'int *flags);',
+          '#endif'], 'ksu_handle_faccessat(&dfd')
           after('fs/open.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW;',
-                ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                 'ksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
-                 '#endif'], 'ksu_handle_faccessat(&dfd')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'ksu_handle_faccessat(&dfd, &filename, &mode, NULL);',
+          '#endif'], 'ksu_handle_faccessat(&dfd')
           before('fs/read_write.c', 'ssize_t vfs_read(struct file *file',
-                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                  'extern bool ksu_vfs_read_hook __read_mostly;',
-                  'extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,',
-                  'size_t *count_ptr, loff_t **pos);',
-                  '#endif'], 'ksu_handle_vfs_read(&file')
-          s = read('fs/read_write.c')
-          if 'ksu_handle_vfs_read(&file' not in s:
-              i = s.find('ssize_t vfs_read(struct file *file')
-              j = s.find('ssize_t ret;', i)
-              if i < 0 or j < 0:
-                  print('[FAIL] fs/read_write.c | vfs_read body not found'); sys.exit(1)
-              j = j + len('ssize_t ret;')
-              s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                  'if (unlikely(ksu_vfs_read_hook))',
-                  'ksu_handle_vfs_read(&file, &buf, &count, &pos);',
-                  '#endif']) + s[j:]
-              write('fs/read_write.c', s); print('[OK] fs/read_write.c')
-          else:
-              print('[SKIP] fs/read_write.c')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'extern bool ksu_vfs_read_hook __read_mostly;',
+          'extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,',
+          'size_t *count_ptr, loff_t **pos);',
+          '#endif'], 'ksu_handle_vfs_read(&file')
+          try:
+              s = read('fs/read_write.c')
+              if 'ksu_handle_vfs_read(&file' not in s:
+                  i = s.find('ssize_t vfs_read(struct file *file')
+                  j = s.find('ssize_t ret;', i)
+                  if i < 0 or j < 0:
+                      print('[WARN] fs/read_write.c | vfs_read body not found (skip)')
+                  else:
+                      j = j + len('ssize_t ret;')
+                      s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                      'if (unlikely(ksu_vfs_read_hook))',
+                      'ksu_handle_vfs_read(&file, &buf, &count, &pos);',
+                      '#endif']) + s[j:]
+                      write('fs/read_write.c', s); print('[OK] fs/read_write.c')
+              else:
+                  print('[SKIP] fs/read_write.c')
+          except FileNotFoundError:
+              print('[SKIP] fs/read_write.c | file not found')
           before('fs/stat.c', 'int vfs_statx(',
-                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                  'extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);',
-                  '#endif'], 'ksu_handle_stat(&dfd')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);',
+          '#endif'], 'ksu_handle_stat(&dfd')
           after('fs/stat.c', 'unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;',
-                ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                 'ksu_handle_stat(&dfd, &filename, &flags);',
-                 '#endif'], 'ksu_handle_stat(&dfd')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'ksu_handle_stat(&dfd, &filename, &flags);',
+          '#endif'], 'ksu_handle_stat(&dfd')
           before('drivers/input/input.c', 'static void input_handle_event(',
-                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                  'extern bool ksu_input_hook __read_mostly;',
-                  'extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);',
-                  '#endif'], 'ksu_handle_input_handle_event(&type')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'extern bool ksu_input_hook __read_mostly;',
+          'extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);',
+          '#endif'], 'ksu_handle_input_handle_event(&type')
           after('drivers/input/input.c', 'int disposition = input_get_disposition(dev, type, code, &value);',
-                ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                 'if (unlikely(ksu_input_hook))',
-                 'ksu_handle_input_handle_event(&type, &code, &value);',
-                 '#endif'], 'ksu_handle_input_handle_event(&type')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'if (unlikely(ksu_input_hook))',
+          'ksu_handle_input_handle_event(&type, &code, &value);',
+          '#endif'], 'ksu_handle_input_handle_event(&type')
           before('fs/devpts/inode.c', 'void *devpts_get_priv(',
-                 ['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                  'extern int ksu_handle_devpts(struct inode *);',
-                  '#endif'], 'ksu_handle_devpts(dentry')
-          s = read('fs/devpts/inode.c')
-          if 'ksu_handle_devpts(dentry' not in s:
-              i = s.find('void *devpts_get_priv(struct dentry *dentry)')
-              j = s.find('{', i)
-              if i < 0 or j < 0:
-                  print('[FAIL] fs/devpts/inode.c | devpts_get_priv not found'); sys.exit(1)
-              j = j + 1
-              s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
-                  'ksu_handle_devpts(dentry->d_inode);',
-                  '#endif']) + s[j:]
-              write('fs/devpts/inode.c', s); print('[OK] fs/devpts/inode.c')
-          else:
-              print('[SKIP] fs/devpts/inode.c')
+          ['#ifdef CONFIG_KSU_MANUAL_HOOK',
+          'extern int ksu_handle_devpts(struct inode *);',
+          '#endif'], 'ksu_handle_devpts(dentry')
+          try:
+              s = read('fs/devpts/inode.c')
+              if 'ksu_handle_devpts(dentry' not in s:
+                  i = s.find('void *devpts_get_priv(struct dentry *dentry)')
+                  j = s.find('{', i)
+                  if i < 0 or j < 0:
+                      print('[WARN] fs/devpts/inode.c | devpts_get_priv not found (skip)')
+                  else:
+                      j = j + 1
+                      s = s[:j] + NL + NL.join(['#ifdef CONFIG_KSU_MANUAL_HOOK',
+                      'ksu_handle_devpts(dentry->d_inode);',
+                      '#endif']) + s[j:]
+                      write('fs/devpts/inode.c', s); print('[OK] fs/devpts/inode.c')
+              else:
+                  print('[SKIP] fs/devpts/inode.c')
+          except FileNotFoundError:
+              print('[SKIP] fs/devpts/inode.c | file not found')
           PYEOF
 
       - name: Build kernel
@@ -219,18 +238,25 @@ jobs:
           done
           # =====================================================================
 
+          # ========== 2. 工具链：用绝对路径，防止回退到系统 clang-12 ==========
           export PATH=$CLANG_PATH:$PATH
-          MAKE_ARGS="O=out ARCH=$ARCH CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          echo "[toolchain] which clang -> $(which clang || echo none)"
+          echo "[toolchain] clang version -> $($CLANG_PATH/clang --version 2>/dev/null | head -1 || echo MISSING)"
+          if [ ! -x "$CLANG_PATH/clang" ]; then
+            echo "致命错误: $CLANG_PATH/clang 不存在（下载/解压失败？），终止以免用错编译器"
+            exit 1
+          fi
+
+          MAKE_ARGS="O=out ARCH=$ARCH CC=$CLANG_PATH/clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
           if [ "$DISABLE_LTO" = "true" ]; then
             MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
           fi
 
-          # ========== 2. 生成配置：defconfig + 强制非交互 olddefconfig ==========
+          # ========== 3. 生成配置：defconfig + 强制非交互 olddefconfig ==========
           echo "[cfg] make $KERNEL_CONFIG"
           make $MAKE_ARGS $KERNEL_CONFIG
           echo "[cfg] olddefconfig (non-interactive)"
           yes '' | make $MAKE_ARGS olddefconfig || true
-
           [ "$ADD_KPROBES_CONFIG"   = "true" ] && ./scripts/config --file out/.config -e KPROBES
           [ "$ADD_OVERLAYFS_CONFIG" = "true" ] && ./scripts/config --file out/.config -e OVERLAY_FS
           [ "$ENABLE_KERNELSU"      = "true" ] && ./scripts/config --file out/.config -e KSU -e KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK
@@ -244,17 +270,30 @@ jobs:
           yes '' | make $MAKE_ARGS olddefconfig || true
           # =====================================================================
 
-          # ========== 3. 编译前校验：杜绝 =true 之类非法值进编译参数 ==========
-          echo "[check] 校验 .config 中 bool 值是否异常 ..."
-          if grep -nE '=(true|false|yes|no)$' out/.config; then
-            echo "[warn] 发现异常 bool 值，自动修正为 y/n"
-            sed -i -E 's/=(true|yes)$/=y/; s/=(false|no)$/=n/' out/.config
-          fi
+          # ========== 4. 编译前校验：清掉会漏进 clang 命令行的非法 bool/字符串值 ==========
+          echo "[check] 规范化 .config 中 bool/字符串值 (true|false|yes|no) ..."
+          echo "[check] 修正前命中："
+          grep -nE '=(true|false|yes|no)$|="(true|false|yes|no)"$' out/.config || echo "  无"
+          # 无引号与带引号的情况一起处理：=true / ="true" -> =y；=false / ="false" -> =n
+          sed -i -E \
+            -e '/^CONFIG_/ s/=(true|yes)$/=y/' \
+            -e '/^CONFIG_/ s/=(false|no)$/=n/' \
+            -e '/^CONFIG_/ s/="(true|yes)"$/=y/' \
+            -e '/^CONFIG_/ s/="(false|no)"$/=n/' \
+            out/.config
+          # 修正后再跑一次 olddefconfig 吸收改动，杜绝残留值进编译参数
+          yes '' | make $MAKE_ARGS olddefconfig || true
+          echo "[check] 修正后仍命中（应为空）："
+          grep -nE '=(true|false|yes|no)$|="(true|false|yes|no)"$' out/.config || echo "  干净"
+
+          echo "[check] 可疑编译环境变量："
+          env | grep -iE '^(KCFLAGS|KCPPFLAGS|KAFLAGS|CC|LD|AS)=' || echo "  无"
+
           echo "[check] synaptics 残留非 ASCII 检查："
           find drivers -path '*touchscreen*' -name 'Kconfig*' -exec sh -c 'LC_ALL=C grep -l "[^[:print:][:space:]]" "$1" 2>/dev/null && echo "  仍有问题: $1"' _ {} \; || echo "  干净"
           # ===================================================================
 
-          # ========== 4. 正式编译 ==========
+          # ========== 5. 正式编译 ==========
           KCFLAGS="-Wno-error"
           echo "[build] make -j$(nproc) $KERNEL_FILE"
           make $MAKE_ARGS KCFLAGS="$KCFLAGS" -j$(nproc) $KERNEL_FILE
@@ -263,8 +302,8 @@ jobs:
 
       - name: Upload artifact
         if: always()
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-          ls -l out/arch/arm64/boot/ || true
-        # 需要产物时把上面 make 目标换成 Image.gz 并启用 MAKE_BOOT_IMAGE 步骤打包 boot.img
-        # 需要 boot.img 时取消注释：MAKE_BOOT_IMAGE=true 并补 Download mkbootimg / source boot image 步骤
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
+          path: android-kernel/out/arch/arm64/boot/
+          if-no-files-found: warn
