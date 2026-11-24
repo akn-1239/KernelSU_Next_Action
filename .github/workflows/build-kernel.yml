@@ -213,6 +213,7 @@ jobs:
           # 真正关闭 Werror，避免 warning 被当成 error
           KCFLAGS="-Wno-error"
           make $MAKE_ARGS $KERNEL_CONFIG
+          yes '' | make $MAKE_ARGS olddefconfig
           if [ "$ADD_KPROBES_CONFIG" = "true" ]; then ./scripts/config --file out/.config -e KPROBES; fi
           if [ "$ADD_OVERLAYFS_CONFIG" = "true" ]; then ./scripts/config --file out/.config -e OVERLAY_FS; fi
           if [ "$ENABLE_KERNELSU" = "true" ]; then ./scripts/config --file out/.config -e KSU -e KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK; fi
