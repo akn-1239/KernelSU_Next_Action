@@ -29,6 +29,28 @@ jobs:
           echo "ADD_OVERLAYFS_CONFIG=$(val ADD_OVERLAYFS_CONFIG)" >> $GITHUB_ENV
           echo "DISABLE_CC_WERROR=$(val DISABLE_CC_WERROR)" >> $GITHUB_ENV
           echo "MAKE_BOOT_IMAGE=$(val MAKE_BOOT_IMAGE)" >> $GITHUB_ENV
+          # 原厂 boot.img 直链（GitHub Web 上传单文件上限 25MB，boot.img 通常更大，
+          # 所以推荐把它放到 Release / 网盘直链，再把 URL 填进 config.env 的 BOOTIMG_URL）
+          echo "BOOTIMG_URL=$(val BOOTIMG_URL)" >> $GITHUB_ENV
+
+      - name: Fetch stock boot image
+        run: |
+          if [ -f boot.img ]; then
+            echo "[ok] 仓库根目录已有 boot.img: $(stat -c%s boot.img) bytes"
+            exit 0
+          fi
+          if [ -n "$BOOTIMG_URL" ]; then
+            echo "[dl] 从 BOOTIMG_URL 下载原厂 boot.img ..."
+            if curl -L --fail --retry 3 -o boot.img "$BOOTIMG_URL"; then
+              ls -lh boot.img
+            else
+              echo "[warn] boot.img 下载失败（链接过期 / 占位符没替换 / 仓库是 private）"
+              echo "[warn] 本次跳过 boot 镜像打包，只产 AnyKernel3 zip"
+              rm -f boot.img
+            fi
+          else
+            echo "[skip] 仓库没有 boot.img，也没有配置 BOOTIMG_URL；本次只产 AnyKernel3 zip"
+          fi
 
       - name: Setup build environment
         run: |
@@ -435,6 +457,19 @@ jobs:
           echo "[check] dtb/dtbo 产出（若有）："
           ls -lh out/arch/arm64/boot/dts/qcom/*.dtb 2>/dev/null | tail -5 || echo "  无独立 dtb（已并入 Image）"
 
+      # AK3 仓库里的 tools/magiskboot 是给手机用的 ARM 二进制，在 GitHub Actions 的
+      # x86_64 runner 上会直接 Exec format error，必须换成 Magisk APK 里的 x86_64 版本
+      - name: Download magiskboot (x86_64)
+        run: |
+          set -e
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          curl -sL --fail -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v31.1/app-debug.apk
+          unzip -o -j magisk.apk lib/x86_64/libmagiskboot.so -d mb >/dev/null
+          mv mb/libmagiskboot.so magiskboot
+          chmod +x magiskboot
+          file magiskboot || true
+          ./magiskboot 2>&1 | head -3 || true
+
       # ========== 路线1：原厂 boot.img + 只替换 kernel（magiskboot 重打包） ==========
       # 完全保留原厂 boot 的结构（header / ramdisk / dtb / avb footer），仅替换内核，
       # 最稳，出问题也只动 boot，recovery + fastboot 都还在。
@@ -444,11 +479,9 @@ jobs:
           set -e
           WS=$GITHUB_WORKSPACE/kernel_workspace
           cd $WS
-          # magiskboot 用 AK3 仓库里的预编译二进制：unpack 会按原镜像真实 header 与压缩格式解析
-          rm -rf ak3tools
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3tools
-          cp ak3tools/tools/magiskboot .
-          chmod +x magiskboot
+          if [ ! -x magiskboot ]; then
+            echo "[error] magiskboot 不存在（上一步下载失败）"; exit 1
+          fi
           if [ ! -f "$GITHUB_WORKSPACE/boot.img" ]; then
             echo "[skip] 仓库根目录没有原厂 boot.img，跳过 boot 镜像打包"
             echo "[skip] 把全量包 payload.bin 里解出的 boot.img 放到仓库根目录（文件名必须是 boot.img）即可启用"
@@ -492,10 +525,7 @@ jobs:
           WS=$GITHUB_WORKSPACE/kernel_workspace
           cd $WS
           if [ ! -x magiskboot ]; then
-            rm -rf ak3tools
-            git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3tools
-            cp ak3tools/tools/magiskboot .
-            chmod +x magiskboot
+            echo "[error] magiskboot 不存在"; exit 1
           fi
           rm -rf ak3
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
@@ -518,7 +548,12 @@ jobs:
 
           cd ak3
           sed -i 's|^kernel.string=.*|kernel.string=OnePlus 9R (lemonades) ColorOS14 KernelSU-Next|' anykernel.sh
-          sed -i 's|^device.name1=.*|device.name1=lemonades\ndevice.name2=OnePlus9R|' anykernel.sh
+          sed -i 's|^device.name1=.*|device.name1=lemonades|' anykernel.sh
+          # 模板自带的 device.name2=toro 等会留下重复键，直接用替换而不是插入
+          sed -i 's|^device.name2=.*|device.name2=OnePlus9R|' anykernel.sh
+          sed -i 's|^device.name3=.*|device.name3=|' anykernel.sh
+          sed -i 's|^device.name4=.*|device.name4=|' anykernel.sh
+          sed -i 's|^device.name5=.*|device.name5=|' anykernel.sh
           sed -i 's|^BLOCK=.*|BLOCK=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
           sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
           sed -i 's|^do.devicecheck=.*|do.devicecheck=0;|' anykernel.sh
