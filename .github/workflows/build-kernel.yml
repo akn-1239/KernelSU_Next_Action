@@ -606,6 +606,6 @@ jobs:
           name: kernel-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
           path: |
             kernel_workspace/AnyKernel3_lemonades_*.zip
-            boot-9R-new.img
-            android-kernel/out/arch/arm64/boot/
+            kernel_workspace/boot-9R-new.img
+            kernel_workspace/android-kernel/out/arch/arm64/boot/Image
           if-no-files-found: warn
