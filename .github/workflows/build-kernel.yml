@@ -72,9 +72,35 @@ jobs:
       - name: Download Clang Toolchain
         run: |
           cd $GITHUB_WORKSPACE/kernel_workspace
-          mkdir clang
-          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r1/clang-r416183b.tar.gz
-          tar -C clang/ -zxf clang-r416183b.tar.gz
+          rm -rf clang clangraw clang.tar.gz && mkdir -p clangraw
+          ok=0
+          for url in \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r1/clang-r416183b.tar.gz" \
+            "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b/archive/refs/heads/lineage-20.0.tar.gz"; do
+            echo "[clang] 尝试下载: $url"
+            if curl -L --fail --retry 5 --retry-delay 6 --retry-all-errors -o clang.tar.gz "$url" \
+               && tar -tzf clang.tar.gz > /dev/null 2>&1; then
+              echo "[clang] 下载成功"
+              ok=1
+              break
+            fi
+            echo "[clang] 失败，换下一个源"
+            rm -f clang.tar.gz
+          done
+          if [ "$ok" != "1" ]; then
+            echo "[error] clang 所有下载源都失败（googlesource 502 / 网络限制）"
+            exit 1
+          fi
+          tar -xf clang.tar.gz -C clangraw
+          # googlesource 的 archive 没有顶层目录；GitHub tarball 多一层，两种情况都归一
+          if [ -x clangraw/bin/clang ]; then
+            mv clangraw clang
+          else
+            CBIN=$(find clangraw -maxdepth 4 -type f -path '*/bin/clang' | head -1)
+            if [ -z "$CBIN" ]; then echo "[error] 解压后找不到 bin/clang"; exit 1; fi
+            mv "$(dirname "$(dirname "$CBIN")")" clang
+          fi
+          "$PWD/clang/bin/clang" --version | head -1
           echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
           echo "CLANG_PATH=$GITHUB_WORKSPACE/kernel_workspace/clang/bin" >> $GITHUB_ENV
 
