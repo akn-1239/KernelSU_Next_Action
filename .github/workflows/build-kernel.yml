@@ -391,6 +391,13 @@ jobs:
           # ========== 3. 生成配置：defconfig + 强制非交互 olddefconfig ==========
           echo "[cfg] make $KERNEL_CONFIG"
           make $MAKE_ARGS $KERNEL_CONFIG
+          # 关键：这棵源码树（OnePlus-9R/kernel_oneplus_sm8250-9R）的 LOCALVERSION 被改成了
+          # "-Havoc-sm8250"，编出来的 vermagic 是 4.19.157-Havoc-sm8250+，
+          # 与原厂 4.19.157-perf+ 不一致 → vendor 内核模块全部拒绝加载 → 开不了机。
+          # 这里强制改回原厂 vermagic "-perf"，并关掉 AUTO 以免多出 -g<sha> 后缀。
+          ./scripts/config --file out/.config --set-str LOCALVERSION "-perf"
+          ./scripts/config --file out/.config --disable LOCALVERSION_AUTO
+          echo "[cfg] LOCALVERSION=$(grep '^CONFIG_LOCALVERSION=' out/.config)"
           echo "[cfg] olddefconfig (non-interactive)"
           make $MAKE_ARGS olddefconfig < /dev/null || true
           [ "$ADD_KPROBES_CONFIG"   = "true" ] && ./scripts/config --file out/.config -e KPROBES
@@ -482,6 +489,8 @@ jobs:
           done
           echo "[check] dtb/dtbo 产出（若有）："
           ls -lh out/arch/arm64/boot/dts/qcom/*.dtb 2>/dev/null | tail -5 || echo "  无独立 dtb（已并入 Image）"
+          echo "[check] 内核 vermagic（必须与原厂 4.19.157-perf+ 一致，否则 vendor 模块加载失败）："
+          strings -a out/arch/arm64/boot/Image | grep -m1 "SMP preempt mod_unload" || echo "  [warn] 未读到 vermagic"
 
       # AK3 仓库里的 tools/magiskboot 是给手机用的 ARM 二进制，在 GitHub Actions 的
       # x86_64 runner 上会直接 Exec format error，必须换成 Magisk APK 里的 x86_64 版本
