@@ -475,7 +475,12 @@ jobs:
 
           # sm8250 / 4.19 厂商树：这棵树 Makefile 第413行无条件用 gcc-wrapper.py 覆盖 CC，
           # 且 REAL_CC 只在 LLVM 为空时定义 → 绝不能传 LLVM=1，必须显式 CC=clang
-          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error OPLUS_FEATURE_WIFI_ROUTERBOOST=1"
+          # 关键加固：UFS/OPLUS 这些 provider 开关同时以「make 变量」形式传入。
+          # 原因：make Image 阶段会因 .config 比 auto.conf 新触发一次 syncconfig/olddefconfig，
+          # 对 CONFIG_UFSFEATURE 这类「非 Kconfig 真符号、只被 Makefile 读取的宏」会被当未知符号
+          # 从 .config 删掉 -> obj-$(CONFIG_UFSFEATURE) 又变空 -> 链接期 undefined reference。
+          # 作为 make 变量传入后，即便 .config 里那行被清掉，Makefile 仍能拿到值，双保险。
+          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error OPLUS_FEATURE_WIFI_ROUTERBOOST=1 OPLUS_FEATURE_ADFR_KERNEL=yes OPLUS_FEATURE_PROCESS_RECLAIM=yes UFSFEATURE=1 UFSHPB=1 UFSHID=1 UFSTW=1 DRM_OPLUS=y"
           if [ "$DISABLE_LTO" = "true" ]; then
             MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
           fi
@@ -520,6 +525,7 @@ jobs:
             fi
             if [ -s out/.config ]; then
               echo "[cfg] 原厂配置行数: $(wc -l < out/.config)"
+              cp out/.config $GITHUB_WORKSPACE/kernel_workspace/stock.config
             else
               echo "[error] 原厂配置抽取失败。不再退回 defconfig（那套开关不全，必然链接失败）"
               exit 1
@@ -558,11 +564,6 @@ jobs:
               -e KSU_SUSFS_SUS_MAP -e KSU_SUSFS_SUS_PATH
           fi
           [ "$DISABLE_CC_WERROR" = "true" ] && ./scripts/config --file out/.config --disable CC_WERROR
-          # 这些开关只被 Makefile 的 obj-$(CONFIG_xxx) 读取（Kconfig 里可能因版本差异被 olddefconfig 丢掉），
-          # 强制写回 =y，否则对应源码不参与编译 → 链接期 undefined reference（ufsf_*/router_boost）
-          ./scripts/config --file out/.config -e UFSFEATURE -e UFSHPB -e UFSHID -e UFSTW \
-            -e OPLUS_FEATURE_WIFI_ROUTERBOOST -e OPLUS_FEATURE_DATA_EVAL || true
-          echo "[cfg] 强制开关: $(grep -E '^CONFIG_(UFSFEATURE|UFSHPB|OPLUS_FEATURE_WIFI_ROUTERBOOST)=' out/.config | tr '\n' ' ')"
           # 用 clang(LLVM=1) 编译时 GCC 插件不支持，必须全关：否则会调用 Python2 的
           # gcc-wrapper.py，触发 SyntaxError / gcc-version.sh printf / init/Kconfig 报错
           echo "[cfg] disable GCC plugins (required for LLVM/clang build)"
@@ -587,6 +588,24 @@ jobs:
             out/.config
           # 修正后再跑一次 olddefconfig 吸收改动，杜绝残留值进编译参数
           make $MAKE_ARGS olddefconfig < /dev/null || true
+
+          # ========== 3.5 最后一步强制写回开关（必须在所有 olddefconfig 之后）==========
+          # olddefconfig 会把 Kconfig 依赖不满足的符号重新裁掉，之前放在中间就被裁了。
+          # 这些 obj-$(CONFIG_xxx) 只被 Makefile 读，写回 =y 就一定参与编译：
+          #   UFSFEATURE/UFSHPB/UFSHID/UFSTW -> drivers/scsi/ufs/ufsfeature.o（ufsf_*）
+          #   DRM_OPLUS                      -> techpack/display/msm/../oplus（adfr / te_refcount）
+          STOCKCONF=$GITHUB_WORKSPACE/kernel_workspace/stock.config
+          if [ -f "$STOCKCONF" ]; then
+            # 把原厂配置里所有「一加/显示/UFS/回收」相关且为 =y 的开关，在最终 .config 里重新写回 =y。
+            # 原因：这些符号在本树的 Kconfig 里依赖链不同，olddefconfig 会把它们裁掉，
+            # 而 Makefile 只看 CONFIG_ 值 → 源码被静默跳过 → 链接期 undefined reference。
+            KEYS=$(grep -oE '^CONFIG_[A-Z0-9_]*(OPLUS|UFS|RECLAIM|ADFR|TECHPACK|TOUCH|FINGERPRINT)[A-Z0-9_]*=y$' "$STOCKCONF" | sed 's/^CONFIG_//;s/=y$//' | sort -u)
+            echo "[cfg] 需要强制写回的开关数量: $(echo "$KEYS" | wc -l)"
+            for k in $KEYS; do ./scripts/config --file out/.config -e "$k" >/dev/null 2>&1 || true; done
+          else
+            ./scripts/config --file out/.config -e UFSFEATURE -e UFSHPB -e UFSHID -e UFSTW -e DRM_OPLUS || true
+          fi
+          echo "[cfg] 最终开关: $(grep -E '^CONFIG_(UFSFEATURE|UFSHPB|DRM_OPLUS|PROCESS_RECLAIM_ENHANCE)=' out/.config | tr '\n' ' ')"
           echo "[check] 修正后仍命中（应为空）："
           grep -nE '=(true|false|yes|no)$|="(true|false|yes|no)"$' out/.config || echo "  干净"
 
@@ -619,7 +638,7 @@ jobs:
           grep -nE 'true' out/.config 2>/dev/null | grep -vE '^[^:]*:[0-9]*:#' | head -20 || echo "  无"
           # 用 V=1 只编失败目标，把真实 clang 命令行打出来
           echo "[diag] ===== V=1 复现 kernel/bounds.s 的完整命令行 ====="
-          make $MAKE_ARGS V=1 kernel/bounds.s 2>&1 | grep -nE 'true' | head -10 || echo "  未捕获到 true"
+          make $MAKE_ARGS V=1 -n kernel/bounds.s 2>&1 | grep -nE 'true' | head -10 || echo "  未捕获到 true"
           # ===================================================================
 
           # ========== 5. 正式编译 ==========
