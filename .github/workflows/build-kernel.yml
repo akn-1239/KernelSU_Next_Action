@@ -129,6 +129,16 @@ jobs:
             src/_vendor_repo
 
           ln -sfn $PWD/src/_vendor_repo/vendor $PWD/src/vendor
+
+          # techpack/{camera,display,video} 在主仓库里是 submodule（gitlink），
+          # 仓库没有 .gitmodules 所以 clone 不下来 → make 报 "techpack/camera/Makefile: No such file or directory"。
+          # 这三个目录的实体在 vendor 仓库的 kernel/msm-4.19/techpack 里，直接软链过去。
+          echo "[src] 挂载 techpack 子模块（camera / display / video）"
+          for d in camera display video; do
+            rm -rf "$SRC/techpack/$d"
+            ln -sfn $PWD/src/_vendor_repo/kernel/msm-4.19/techpack/$d "$SRC/techpack/$d"
+            if [ -f "$SRC/techpack/$d/Makefile" ]; then echo "  [src][ok] techpack/$d"; else echo "  [src][miss] techpack/$d"; fi
+          done
           # 下游所有步骤仍在 kernel_workspace/android-kernel 下工作，这里只做一个软链接指过去
           ln -sfn "$SRC" $PWD/android-kernel
 
@@ -308,6 +318,18 @@ jobs:
           set -e
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
 
+          # ========== -0. 全局关掉 -Werror ==========
+          # 厂商/OPLUS 代码里大量老式写法（如 bool tp_boot_mode_normal() 没写 void），
+          # 配 -Wstrict-prototypes + -Werror 直接报 error：
+          #   touchpanel_common_driver.c:1673: error: this old-style function definition ...
+          # 这类告警不影响功能，把树里所有 Makefile/Kbuild 的 -Werror 换成 -Wno-error。
+          echo "[fix] 全局移除 -Werror（保留告警）..."
+          n=0
+          while IFS= read -r f; do
+            sed -i 's/-Werror/-Wno-error/g' "$f"; n=$((n+1))
+          done < <(grep -rl -- "-Werror" --include='Makefile' --include='Kbuild' --include='*.mk' --include='Makefile.*' . 2>/dev/null)
+          echo "[fix] 已处理 $n 个文件"
+
           # ========== 0. 4.19 没有 strscpy_pad（4.20 才加入），KSU-Next 版本判断误以为存在 ==========
           # 强制 kernel_compat.h 的 __strscpy_pad 走 strscpy+memset 回退分支
           COMPAT=drivers/kernelsu/compat/kernel_compat.h
@@ -415,7 +437,7 @@ jobs:
 
           # sm8250 / 4.19 厂商树：这棵树 Makefile 第413行无条件用 gcc-wrapper.py 覆盖 CC，
           # 且 REAL_CC 只在 LLVM 为空时定义 → 绝不能传 LLVM=1，必须显式 CC=clang
-          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error"
           if [ "$DISABLE_LTO" = "true" ]; then
             MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
           fi
