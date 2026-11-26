@@ -397,7 +397,13 @@ jobs:
           # 这里强制改回原厂 vermagic "-perf"，并关掉 AUTO 以免多出 -g<sha> 后缀。
           ./scripts/config --file out/.config --set-str LOCALVERSION "-perf"
           ./scripts/config --file out/.config --disable LOCALVERSION_AUTO
+          # 关键 2：原厂内核 CONFIG_MODULE_SIG_FORCE=y，只信任一加自己的签名密钥。
+          # 我们自编内核内置的是 CI 临时密钥，vendor 里一加签名的 .ko 会被直接拒绝加载
+          # （exec format error / invalid module format）→ 关键驱动缺失 → 开不了机。
+          # 关掉 FORCE 后，签名不匹配只 taint 内核，模块照常加载。
+          ./scripts/config --file out/.config --disable MODULE_SIG_FORCE
           echo "[cfg] LOCALVERSION=$(grep '^CONFIG_LOCALVERSION=' out/.config)"
+          echo "[cfg] MODULE_SIG: $(grep -E '^CONFIG_MODULE_SIG' out/.config | tr '\n' ' ')"
           echo "[cfg] olddefconfig (non-interactive)"
           make $MAKE_ARGS olddefconfig < /dev/null || true
           [ "$ADD_KPROBES_CONFIG"   = "true" ] && ./scripts/config --file out/.config -e KPROBES
@@ -531,6 +537,14 @@ jobs:
           ls -lh
           ORIG_K=$(stat -c%s kernel 2>/dev/null || echo 0)
           echo "[stock] 原厂 kernel 大小: $ORIG_K bytes"
+          # 从原厂内核里抽出它自带的 .config（IKCONFIG），打印关键项，便于和新编配置对照
+          if [ -f $WS/android-kernel/scripts/extract-ikconfig ]; then
+            bash $WS/android-kernel/scripts/extract-ikconfig kernel > $WS/stock.config 2>/dev/null || true
+            echo "[stock] 原厂关键配置："
+            grep -E '^CONFIG_(LOCALVERSION=|MODULE_SIG=|MODULE_SIG_FORCE=|MODULES=|DM_VERITY=|SECURITY_SELINUX=)' $WS/stock.config || echo "  [warn] 未取到配置"
+            echo "[stock] 新编配置对照："
+            grep -E '^CONFIG_(LOCALVERSION=|MODULE_SIG=|MODULE_SIG_FORCE=)' $WS/android-kernel/out/.config || true
+          fi
 
           cp $WS/android-kernel/out/arch/arm64/boot/Image kernel
           NEW_K=$(stat -c%s kernel)
@@ -616,5 +630,7 @@ jobs:
           path: |
             kernel_workspace/AnyKernel3_lemonades_*.zip
             kernel_workspace/boot-9R-new.img
+            kernel_workspace/android-kernel/out/.config
+            kernel_workspace/stock.config
             kernel_workspace/android-kernel/out/arch/arm64/boot/Image
           if-no-files-found: warn
