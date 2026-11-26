@@ -482,13 +482,43 @@ jobs:
           # oplus_router_boost_handler、dsi_panel_need_rewrite_reg、ufsf_* 这些符号，
           # 开关一关就链接期 undefined reference。直接用原厂 .config 才能保证 =y/=m 判定完全一致。
           STOCKCFG=$GITHUB_WORKSPACE/kernel_workspace/stock-kernel
+          mkdir -p out
+          rm -f out/.config
           if [ -f "$STOCKCFG" ]; then
             echo "[cfg] 用原厂 kernel 内置配置做基线"
-            bash scripts/extract-ikconfig "$STOCKCFG" > out/.config 2>/dev/null || true
+            # scripts/extract-ikconfig 依赖外部工具、在 runner 上容易静默失败，
+            # 这里直接用 python 扫 IKCFG_ST..IKCFG_ED 区间并 gunzip，稳。
+            python3 - "$STOCKCFG" out/.config <<'IKPY'
+          import sys, zlib
+          src, dst = sys.argv[1], sys.argv[2]
+          data = open(src, 'rb').read()
+          i = data.find(b'IKCFG_ST')
+          j = data.find(b'IKCFG_ED', i)
+          if i < 0 or j < 0:
+              print('[cfg] 原厂 kernel 里没找到 IKCFG_ST/IKCFG_ED')
+              sys.exit(1)
+          raw = data[i + 8:j]
+          for wbits in (16 + zlib.MAX_WBITS, -zlib.MAX_WBITS):
+              try:
+                  txt = zlib.decompress(raw, wbits)
+                  break
+              except Exception:
+                  txt = None
+          if not txt:
+              print('[cfg] IKCONFIG 解压失败')
+              sys.exit(1)
+          open(dst, 'wb').write(txt)
+          print('[cfg] 抽取成功，行数:', len(txt.splitlines()))
+          IKPY
+            if [ ! -s out/.config ]; then
+              echo "[warn] python 抽取失败，退回 scripts/extract-ikconfig"
+              bash scripts/extract-ikconfig "$STOCKCFG" > out/.config 2>/dev/null || true
+            fi
             if [ -s out/.config ]; then
               echo "[cfg] 原厂配置行数: $(wc -l < out/.config)"
             else
-              echo "[warn] 原厂配置抽取失败，退回 defconfig"
+              echo "[error] 原厂配置抽取失败。不再退回 defconfig（那套开关不全，必然链接失败）"
+              exit 1
             fi
           fi
           if [ ! -s out/.config ]; then
@@ -510,6 +540,11 @@ jobs:
           echo "[cfg] MODULE_SIG: $(grep -E '^CONFIG_MODULE_SIG' out/.config | tr '\n' ' ')"
           echo "[cfg] olddefconfig (non-interactive)"
           make $MAKE_ARGS olddefconfig < /dev/null || true
+          echo "[cfg] 关键开关自检（缺任何一个都会在链接期 undefined reference）："
+          grep -E '^CONFIG_(DRM_MSM|SCSI_UFS_QCOM|DM_CRYPT|MODULES|OPLUS_SYSTEM_KERNEL_QCOM)=' out/.config || true
+          for k in DRM_MSM SCSI_UFS_QCOM DM_CRYPT; do
+            grep -q "^CONFIG_$k=y" out/.config || echo "[cfg][warn] CONFIG_$k 不是 y，链接很可能失败"
+          done
           [ "$ADD_KPROBES_CONFIG"   = "true" ] && ./scripts/config --file out/.config -e KPROBES
           [ "$ADD_OVERLAYFS_CONFIG" = "true" ] && ./scripts/config --file out/.config -e OVERLAY_FS
           [ "$ENABLE_KERNELSU"      = "true" ] && ./scripts/config --file out/.config -e KSU -e KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK
