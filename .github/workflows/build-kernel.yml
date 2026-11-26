@@ -153,10 +153,14 @@ jobs:
           # 仓库没有 .gitmodules 所以 clone 不下来 → make 报 "techpack/camera/Makefile: No such file or directory"。
           # 这三个目录的实体在 vendor 仓库的 kernel/msm-4.19/techpack 里，直接软链过去。
           echo "[src] 挂载 techpack 子模块（camera / display / video）"
+          # 必须用「真目录」而不是软链：techpack/Kbuild 用
+          #   find $(srctree)/techpack -maxdepth 1 -mindepth 1 -type d
+          # 收集子目录，find -type d 不会把软链当目录 → display/camera/video 会被静默跳过，
+          # 于是 dsi_panel_need_rewrite_reg / msm_drm_register_client 这些全变成 undefined。
           for d in camera display video; do
             rm -rf "$SRC/techpack/$d"
-            ln -sfn $PWD/src/_vendor_repo/kernel/msm-4.19/techpack/$d "$SRC/techpack/$d"
-            if [ -f "$SRC/techpack/$d/Makefile" ]; then echo "  [src][ok] techpack/$d"; else echo "  [src][miss] techpack/$d"; fi
+            cp -a $PWD/src/_vendor_repo/kernel/msm-4.19/techpack/$d "$SRC/techpack/$d"
+            if [ -f "$SRC/techpack/$d/Makefile" ]; then echo "  [src][ok] techpack/$d (real dir)"; else echo "  [src][miss] techpack/$d"; fi
           done
 
           # vendor 里的充电器代码写死了 ../../../../kernel/msm-4.19/drivers/... 这种相对路径，
@@ -471,7 +475,7 @@ jobs:
 
           # sm8250 / 4.19 厂商树：这棵树 Makefile 第413行无条件用 gcc-wrapper.py 覆盖 CC，
           # 且 REAL_CC 只在 LLVM 为空时定义 → 绝不能传 LLVM=1，必须显式 CC=clang
-          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error"
+          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error OPLUS_FEATURE_WIFI_ROUTERBOOST=1"
           if [ "$DISABLE_LTO" = "true" ]; then
             MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
           fi
@@ -554,6 +558,11 @@ jobs:
               -e KSU_SUSFS_SUS_MAP -e KSU_SUSFS_SUS_PATH
           fi
           [ "$DISABLE_CC_WERROR" = "true" ] && ./scripts/config --file out/.config --disable CC_WERROR
+          # 这些开关只被 Makefile 的 obj-$(CONFIG_xxx) 读取（Kconfig 里可能因版本差异被 olddefconfig 丢掉），
+          # 强制写回 =y，否则对应源码不参与编译 → 链接期 undefined reference（ufsf_*/router_boost）
+          ./scripts/config --file out/.config -e UFSFEATURE -e UFSHPB -e UFSHID -e UFSTW \
+            -e OPLUS_FEATURE_WIFI_ROUTERBOOST -e OPLUS_FEATURE_DATA_EVAL || true
+          echo "[cfg] 强制开关: $(grep -E '^CONFIG_(UFSFEATURE|UFSHPB|OPLUS_FEATURE_WIFI_ROUTERBOOST)=' out/.config | tr '\n' ' ')"
           # 用 clang(LLVM=1) 编译时 GCC 插件不支持，必须全关：否则会调用 Python2 的
           # gcc-wrapper.py，触发 SyntaxError / gcc-version.sh printf / init/Kconfig 报错
           echo "[cfg] disable GCC plugins (required for LLVM/clang build)"
