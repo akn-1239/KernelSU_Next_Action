@@ -33,24 +33,43 @@ jobs:
           # 所以推荐把它放到 Release / 网盘直链，再把 URL 填进 config.env 的 BOOTIMG_URL）
           echo "BOOTIMG_URL=$(val BOOTIMG_URL)" >> $GITHUB_ENV
 
-      - name: Fetch stock boot image
+      - name: Fetch stock boot image (+ 原厂 kernel 与配置)
         run: |
+          WS=$GITHUB_WORKSPACE/kernel_workspace
+          mkdir -p $WS
+          cd $GITHUB_WORKSPACE
           if [ -f boot.img ]; then
             echo "[ok] 仓库根目录已有 boot.img: $(stat -c%s boot.img) bytes"
-            exit 0
-          fi
-          if [ -n "$BOOTIMG_URL" ]; then
+          elif [ -n "$BOOTIMG_URL" ]; then
             echo "[dl] 从 BOOTIMG_URL 下载原厂 boot.img ..."
             if curl -L --fail --retry 3 -o boot.img "$BOOTIMG_URL"; then
               ls -lh boot.img
             else
               echo "[warn] boot.img 下载失败（链接过期 / 占位符没替换 / 仓库是 private）"
-              echo "[warn] 本次跳过 boot 镜像打包，只产 AnyKernel3 zip"
               rm -f boot.img
             fi
-          else
-            echo "[skip] 仓库没有 boot.img，也没有配置 BOOTIMG_URL；本次只产 AnyKernel3 zip"
           fi
+
+          if [ -f boot.img ]; then
+            # 提前准备好 magiskboot（x86_64），用它解出原厂 kernel，供后面直接复用原厂 .config
+            if [ ! -x $WS/magiskboot ]; then
+              curl -sL --fail -o $WS/magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v31.1/app-debug.apk || true
+              unzip -o -j $WS/magisk.apk lib/x86_64/libmagiskboot.so -d $WS/mb >/dev/null 2>&1 || true
+              [ -f $WS/mb/libmagiskboot.so ] && mv $WS/mb/libmagiskboot.so $WS/magiskboot && chmod +x $WS/magiskboot
+            fi
+            rm -rf $WS/bootunpack && mkdir -p $WS/bootunpack
+            cp boot.img $WS/bootunpack/
+            ( cd $WS/bootunpack && $WS/magiskboot unpack boot.img ) > $WS/bootunpack/unpack.log 2>&1 || true
+            if [ -f $WS/bootunpack/kernel ]; then
+              cp $WS/bootunpack/kernel $WS/stock-kernel
+              echo "[stock] 原厂 kernel: $(stat -c%s $WS/stock-kernel) bytes"
+            else
+              echo "[warn] 没能从 boot.img 解出 kernel，后面会退回 defconfig"
+            fi
+            grep -E 'HEADER_VER|KERNEL_FMT|RAMDISK_FMT|PAGESIZE' $WS/bootunpack/unpack.log || true
+          fi
+
+      - name: Setup build environment
 
       - name: Setup build environment
         run: |
@@ -459,9 +478,25 @@ jobs:
             MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
           fi
 
-          # ========== 3. 生成配置：defconfig + 强制非交互 olddefconfig ==========
-          echo "[cfg] make $KERNEL_CONFIG"
-          make $MAKE_ARGS $KERNEL_CONFIG
+          # ========== 3. 生成配置：优先直接用原厂 kernel 内置的 .config ==========
+          # defconfig（kona-perf_defconfig）只是基础骨架，很多 OPLUS 特性开关在里面是关的，
+          # 而树里被 patch 过的核心文件（ufshcd / drm_sysfs / net/ipv4 ...）无条件引用
+          # oplus_router_boost_handler、dsi_panel_need_rewrite_reg、ufsf_* 这些符号，
+          # 开关一关就链接期 undefined reference。直接用原厂 .config 才能保证 =y/=m 判定完全一致。
+          STOCKCFG=$GITHUB_WORKSPACE/kernel_workspace/stock-kernel
+          if [ -f "$STOCKCFG" ]; then
+            echo "[cfg] 用原厂 kernel 内置配置做基线"
+            bash scripts/extract-ikconfig "$STOCKCFG" > out/.config 2>/dev/null || true
+            if [ -s out/.config ]; then
+              echo "[cfg] 原厂配置行数: $(wc -l < out/.config)"
+            else
+              echo "[warn] 原厂配置抽取失败，退回 defconfig"
+            fi
+          fi
+          if [ ! -s out/.config ]; then
+            echo "[cfg] make $KERNEL_CONFIG"
+            make $MAKE_ARGS $KERNEL_CONFIG
+          fi
           # 关键：这棵源码树（OnePlus-9R/kernel_oneplus_sm8250-9R）的 LOCALVERSION 被改成了
           # "-Havoc-sm8250"，编出来的 vermagic 是 4.19.157-Havoc-sm8250+，
           # 与原厂 4.19.157-perf+ 不一致 → vendor 内核模块全部拒绝加载 → 开不了机。
@@ -575,6 +610,11 @@ jobs:
         run: |
           set -e
           cd $GITHUB_WORKSPACE/kernel_workspace
+          if [ -x magiskboot ]; then
+            echo "[skip] magiskboot 已就绪"
+            ./magiskboot 2>&1 | head -3 || true
+            exit 0
+          fi
           curl -sL --fail -o magisk.apk https://github.com/topjohnwu/Magisk/releases/download/v31.1/app-debug.apk
           unzip -o -j magisk.apk lib/x86_64/libmagiskboot.so -d mb >/dev/null
           mv mb/libmagiskboot.so magiskboot
