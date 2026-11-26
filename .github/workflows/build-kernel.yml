@@ -185,6 +185,59 @@ jobs:
           done
 
       # 方案A：SUSFS 已内嵌进 KernelSU-Next，删除原 susfs4ksu 补丁与 Fix SUSFS patch rejects 步骤
+      - name: Patch 源码树（RTIC 段合并 / genksyms 兼容）
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel || exit 1
+          python3 - <<'PATCHEOF'
+          import re, os
+          root = os.getcwd()
+
+          # ---- 1) genksyms 不认识「函数返回类型上的 __packed」----
+          # 后果：该导出符号版本生成失败 → __kcrctab 里的 .long __crc_xxx 无法重定位 →
+          #   relocation R_AARCH64_ABS32 against `__crc_gsi_write_channel_scratch'
+          #   can not be used when making a shared object  + dangerous relocation
+          p = os.path.join(root, 'drivers/platform/msm/gsi/gsi.c')
+          if os.path.exists(p):
+              t = open(p, encoding='utf-8', errors='ignore').read()
+              old = 'static union __packed gsi_channel_scratch __gsi_update_mhi_channel_scratch'
+              new = 'static union gsi_channel_scratch __gsi_update_mhi_channel_scratch'
+              if old in t:
+                  open(p, 'w', encoding='utf-8').write(t.replace(old, new))
+                  print('[PATCH] gsi.c: 返回类型去掉 __packed（genksyms 兼容）')
+              else:
+                  print('[SKIP] gsi.c: 未找到目标签名（可能已修）')
+
+          # ---- 2) .bss.rtic 并进正常 .bss ----
+          # 这棵树的 vmlinux.lds.S 在 _end 之后单独开了一个 `.bss : { RTIC_BSS }`，
+          # selinux_state 等符号落在该孤立段里，ADRP(±4GB) 无法寻址 →
+          #   relocation truncated to fit: R_AARCH64_ADR_PREL_PG_HI21 against `selinux_state'
+          h = os.path.join(root, 'include/asm-generic/vmlinux.lds.h')
+          t = open(h, encoding='utf-8').read()
+          if '*(.bss.rtic)' not in t:
+              t2 = re.sub(r'(\t\t\*\(BSS_MAIN\)[^\n]*\\\n)',
+                          lambda m: m.group(1) + '\t\t*(.bss.rtic)\t\t\t\t\t\t\\\n',
+                          t, count=1)
+              if t2 != t:
+                  open(h, 'w', encoding='utf-8').write(t2)
+                  print('[PATCH] vmlinux.lds.h: .bss.rtic 并入 .bss')
+              else:
+                  print('[WARN] vmlinux.lds.h: 未匹配到 BSS_MAIN，未改动')
+          else:
+              print('[SKIP] vmlinux.lds.h: 已包含 .bss.rtic')
+
+          l = os.path.join(root, 'arch/arm64/kernel/vmlinux.lds.S')
+          t = open(l, encoding='utf-8').read()
+          if 'RTIC_BSS' in t:
+              t2 = re.sub(r'\n\t\.bss : \{[^\n]*\n[^\n]*RTIC_BSS[^\n]*\n\t\}\n', '\n', t, count=1)
+              if t2 != t:
+                  open(l, 'w', encoding='utf-8').write(t2)
+                  print('[PATCH] vmlinux.lds.S: 删除 _end 后的孤立 .bss{RTIC_BSS} 段')
+              else:
+                  print('[WARN] vmlinux.lds.S: 未匹配到 RTIC_BSS 段')
+          else:
+              print('[SKIP] vmlinux.lds.S: 无 RTIC_BSS')
+          PATCHEOF
+
       - name: Setup KernelSU-Next (standalone SUSFS)
         if: env.ENABLE_KERNELSU == 'true'
         run: |
@@ -604,6 +657,7 @@ jobs:
           # fork.o 就不会再引用该符号（该功能只是 oplus 的 ion 任务内存跟踪，不影响开机）
           ./scripts/config --file out/.config -d DUMP_TASKS_MEM >/dev/null 2>&1 || true
           echo "[cfg] 最终开关: $(grep -E '^CONFIG_(UFSFEATURE|UFSHPB|DRM_OPLUS|PROCESS_RECLAIM_ENHANCE)=' out/.config | tr '\n' ' ')"
+          echo "[cfg] 链接相关: $(grep -E '^CONFIG_(HAVE_ARCH_PREL32_RELOCATIONS|MODVERSIONS|RELOCATABLE|MODULE_SIG_ALL)=' out/.config | tr '\n' ' ')"
           echo "[check] 修正后仍命中（应为空）："
           grep -nE '=(true|false|yes|no)$|="(true|false|yes|no)"$' out/.config || echo "  干净"
 
