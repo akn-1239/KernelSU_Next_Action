@@ -104,11 +104,43 @@ jobs:
           echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
           echo "CLANG_PATH=$GITHUB_WORKSPACE/kernel_workspace/clang/bin" >> $GITHUB_ENV
 
-      - name: Download kernel source
+      # 关键修复：OnePlusOSS 的主内核树本身不完整 —— 树里 91 个软链接指向仓库外的
+      # vendor/oplus（sched_assist、rootguard、fingerprint、sensor 等私有代码），
+      # 只 clone 主仓库时 init/Kconfig:772 会 can't open file "kernel/sched_assist/Kconfig"。
+      # 官方把这块单独放在 android_kernel_modules_and_devicetree_oneplus_sm8250，
+      # 而且上游是按 AOSP 目录深度（kernel/<name> + ../vendor）写的软链，必须还原这个结构。
+      - name: Download kernel source (+ OPLUS vendor tree)
         run: |
+          set -e
           cd $GITHUB_WORKSPACE/kernel_workspace
-          echo "Cloning ${{ env.KERNEL_SOURCE }} (${{ env.KERNEL_SOURCE_BRANCH }}) ..."
-          git clone --depth=1 -b ${{ env.KERNEL_SOURCE_BRANCH }} ${{ env.KERNEL_SOURCE }} android-kernel
+          rm -rf src android-kernel
+          # 目录深度必须精确：树里的软链按 "../../../vendor/..." 解析，
+          # 实测只有把内核树放在 <root>/kernel/<name>（即 root 下 2 层）、
+          # vendor 放在 <root>/vendor 时，130 个软链才全部解析成功。
+          mkdir -p src/kernel
+          SRC=$PWD/src/kernel/sm8250
+
+          echo "[src] 主内核树: ${{ env.KERNEL_SOURCE }} (${{ env.KERNEL_SOURCE_BRANCH }})"
+          git clone --depth=1 -b ${{ env.KERNEL_SOURCE_BRANCH }} ${{ env.KERNEL_SOURCE }} "$SRC"
+
+          echo "[src] OPLUS vendor 树（同分支）"
+          git clone --depth=1 -b ${{ env.KERNEL_SOURCE_BRANCH }} \
+            https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8250 \
+            src/_vendor_repo
+
+          ln -sfn $PWD/src/_vendor_repo/vendor $PWD/src/vendor
+          # 下游所有步骤仍在 kernel_workspace/android-kernel 下工作，这里只做一个软链接指过去
+          ln -sfn "$SRC" $PWD/android-kernel
+
+          echo "[src] 自检：软链接是否都能解析"
+          dangle=0
+          for l in $(find "$SRC" -maxdepth 6 -type l); do
+            [ -e "$l" ] || { dangle=$((dangle+1)); [ $dangle -le 5 ] && echo "  [dangle] ${l#$SRC/}"; }
+          done
+          echo "[src] dangling=$dangle"
+          for f in kernel/sched_assist/Kconfig drivers/oplus/Kconfig vendor/oplus/kernel/oplus_performance/sched_assist/Kconfig; do
+            if [ -e "$SRC/$f" ]; then echo "[src][ok] $f"; else echo "[src][miss] $f"; fi
+          done
 
       # 方案A：SUSFS 已内嵌进 KernelSU-Next，删除原 susfs4ksu 补丁与 Fix SUSFS patch rejects 步骤
       - name: Setup KernelSU-Next (standalone SUSFS)
