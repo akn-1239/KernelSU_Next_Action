@@ -544,6 +544,16 @@ jobs:
             grep -E '^CONFIG_(LOCALVERSION=|MODULE_SIG=|MODULE_SIG_FORCE=|MODULES=|DM_VERITY=|SECURITY_SELINUX=)' $WS/stock.config || echo "  [warn] 未取到配置"
             echo "[stock] 新编配置对照："
             grep -E '^CONFIG_(LOCALVERSION=|MODULE_SIG=|MODULE_SIG_FORCE=)' $WS/android-kernel/out/.config || true
+            # 原厂有、新编缺失的关键驱动配置（缺这些必然起不来：无法解密 /data、无触摸屏）
+            for k in DM_CRYPT TOUCHPANEL_OPLUS OPLUS_FINGERPRINT OPLUS_SYSTEM_KERNEL_QCOM; do
+              if grep -q "^CONFIG_$k=y" $WS/stock.config; then
+                if grep -q "^CONFIG_$k=y" $WS/android-kernel/out/.config; then
+                  echo "[cmp] $k: 一致"
+                else
+                  echo "[cmp][warn] $k: 原厂为 y，新编缺失（源码树/defconfig 不对应）"
+                fi
+              fi
+            done
           fi
 
           cp $WS/android-kernel/out/arch/arm64/boot/Image kernel
