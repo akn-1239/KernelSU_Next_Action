@@ -225,6 +225,30 @@ jobs:
           else:
               print('[SKIP] vmlinux.lds.h: 已包含 .bss.rtic')
 
+          # ---- 3) 跳过模块符号版本(__crc)校验 ----
+          # 现象：/sys/module 里看不到 /vendor/lib/modules 的任何 .ko，模块整批不加载，
+          # 传感器 SSC/QMI 服务因此起不来（oplus_sensor_fb 崩在 qmi_wait_for_service）。
+          # 原因：本树导出的 __crc 与 ROM 里 vendor 模块记录的 crc 不一致，
+          # 模块会以 "disagrees about version of symbol" 被 kernel/module.c 拒绝。
+          m = os.path.join(root, 'kernel/module.c')
+          t = open(m, encoding='utf-8').read()
+          anchor_fn = ("static int check_version(const struct load_info *info,\n"
+                       "\t\t\t const char *symname,\n"
+                       "\t\t\t struct module *mod,\n"
+                       "\t\t\t const s32 *crc)\n"
+                       "{\n")
+          if 'SKIP_CRC_CHECK' not in t:
+              if anchor_fn in t:
+                  t = t.replace(anchor_fn, anchor_fn +
+                      "\t/* SKIP_CRC_CHECK: 本树 __crc 与 ROM vendor 模块不一致，跳过校验 */\n"
+                      "\treturn 1;\n\n", 1)
+                  open(m, 'w', encoding='utf-8').write(t)
+                  print('[PATCH] kernel/module.c: check_version() 跳过 __crc 校验')
+              else:
+                  print('[WARN] kernel/module.c: 未匹配 check_version 签名，未改动')
+          else:
+              print('[SKIP] kernel/module.c: 已打过补丁')
+
           l = os.path.join(root, 'arch/arm64/kernel/vmlinux.lds.S')
           t = open(l, encoding='utf-8').read()
           if 'RTIC_BSS' in t:
@@ -642,17 +666,13 @@ jobs:
           # 这些 obj-$(CONFIG_xxx) 只被 Makefile 读，写回 =y 就一定参与编译：
           #   UFSFEATURE/UFSHPB/UFSHID/UFSTW -> drivers/scsi/ufs/ufsfeature.o（ufsf_*）
           #   DRM_OPLUS                      -> techpack/display/msm/../oplus（adfr / te_refcount）
-          STOCKCONF=$GITHUB_WORKSPACE/kernel_workspace/stock.config
-          if [ -f "$STOCKCONF" ]; then
-            # 把原厂配置里所有「一加/显示/UFS/回收」相关且为 =y 的开关，在最终 .config 里重新写回 =y。
-            # 原因：这些符号在本树的 Kconfig 里依赖链不同，olddefconfig 会把它们裁掉，
-            # 而 Makefile 只看 CONFIG_ 值 → 源码被静默跳过 → 链接期 undefined reference。
-            KEYS=$(grep -oE '^CONFIG_[A-Z0-9_]*(OPLUS|UFS|RECLAIM|ADFR|TECHPACK|TOUCH|FINGERPRINT)[A-Z0-9_]*=y$' "$STOCKCONF" | sed 's/^CONFIG_//;s/=y$//' | sort -u)
-            echo "[cfg] 需要强制写回的开关数量: $(echo "$KEYS" | wc -l)"
-            for k in $KEYS; do ./scripts/config --file out/.config -e "$k" >/dev/null 2>&1 || true; done
-          else
-            ./scripts/config --file out/.config -e UFSFEATURE -e UFSHPB -e UFSHID -e UFSTW -e DRM_OPLUS || true
-          fi
+          # 只强制「链接期确实被引用、缺了必 undefined」的白名单，其余一律遵循 olddefconfig 的裁剪结果。
+          # 上一版用正则把原厂里所有 OPLUS/UFS/... 的 =y 开关全硬写回去（153 个），风险是：
+          # 本树对其中一部分特性的依赖链并不完整，硬开会把「半成品特性」编进内核 → 开着机但卡住。
+          # 白名单依据：每一条都对应上一轮实际出现过的 undefined symbol。
+          WHITELIST="UFSFEATURE UFSHPB UFSHID UFSTW DRM_OPLUS PROCESS_RECLAIM_ENHANCE OPLUS_FEATURE_WIFI_ROUTERBOOST OPLUS_FEATURE_DATA_EVAL"
+          echo "[cfg] 强制白名单开关: $WHITELIST"
+          for k in $WHITELIST; do ./scripts/config --file out/.config -e "$k" >/dev/null 2>&1 || true; done
           # fork.c 里 update_user_tasklist 依赖 CONFIG_DUMP_TASKS_MEM，本树没有它的实现 → 关掉这个开关，
           # fork.o 就不会再引用该符号（该功能只是 oplus 的 ion 任务内存跟踪，不影响开机）
           ./scripts/config --file out/.config -d DUMP_TASKS_MEM >/dev/null 2>&1 || true
