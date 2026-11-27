@@ -670,7 +670,7 @@ jobs:
           # 全部按原厂值写回。这样内核配置 ≈ 出 ROM 的那颗内核，排除「配置偏离」这条变量。
           # 覆盖项只有四个：MODULE_SIG_FORCE 关（否则 vendor 模块签名对不上）、
           # DUMP_TASKS_MEM 关（本树无 update_user_tasklist 实现）、链接必需的白名单、LOCALVERSION。
-          python3 - "$STOCKCONF" out/.config <<'CFGEOF'
+          python3 - "$STOCKCONF" out/.config <<CFGEOF
           import sys, re
           stock, cur = sys.argv[1], sys.argv[2]
 
