@@ -670,7 +670,11 @@ jobs:
           # 全部按原厂值写回。这样内核配置 ≈ 出 ROM 的那颗内核，排除「配置偏离」这条变量。
           # 覆盖项只有四个：MODULE_SIG_FORCE 关（否则 vendor 模块签名对不上）、
           # DUMP_TASKS_MEM 关（本树无 update_user_tasklist 实现）、链接必需的白名单、LOCALVERSION。
-          python3 - "$STOCKCONF" out/.config <<CFGEOF
+          # 原厂纯净配置：Build kernel 开头解出的那份（6676 行），临时目录路径兜底
+          STOCKPLAIN=$GITHUB_WORKSPACE/kernel_workspace/stock.config
+          [ -s "$STOCKPLAIN" ] || STOCKPLAIN=$STOCKCFG
+          echo "[cfg] 对齐基准: $STOCKPLAIN ($(wc -l < "$STOCKPLAIN") 行)"
+          python3 - "$STOCKPLAIN" out/.config <<CFGEOF
           import sys, re
           stock, cur = sys.argv[1], sys.argv[2]
 
