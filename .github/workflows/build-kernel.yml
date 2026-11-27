@@ -666,16 +666,55 @@ jobs:
           # 这些 obj-$(CONFIG_xxx) 只被 Makefile 读，写回 =y 就一定参与编译：
           #   UFSFEATURE/UFSHPB/UFSHID/UFSTW -> drivers/scsi/ufs/ufsfeature.o（ufsf_*）
           #   DRM_OPLUS                      -> techpack/display/msm/../oplus（adfr / te_refcount）
-          # 只强制「链接期确实被引用、缺了必 undefined」的白名单，其余一律遵循 olddefconfig 的裁剪结果。
-          # 上一版用正则把原厂里所有 OPLUS/UFS/... 的 =y 开关全硬写回去（153 个），风险是：
-          # 本树对其中一部分特性的依赖链并不完整，硬开会把「半成品特性」编进内核 → 开着机但卡住。
-          # 白名单依据：每一条都对应上一轮实际出现过的 undefined symbol。
-          WHITELIST="UFSFEATURE UFSHPB UFSHID UFSTW DRM_OPLUS PROCESS_RECLAIM_ENHANCE OPLUS_FEATURE_WIFI_ROUTERBOOST OPLUS_FEATURE_DATA_EVAL"
-          echo "[cfg] 强制白名单开关: $WHITELIST"
-          for k in $WHITELIST; do ./scripts/config --file out/.config -e "$k" >/dev/null 2>&1 || true; done
-          # fork.c 里 update_user_tasklist 依赖 CONFIG_DUMP_TASKS_MEM，本树没有它的实现 → 关掉这个开关，
-          # fork.o 就不会再引用该符号（该功能只是 oplus 的 ion 任务内存跟踪，不影响开机）
-          ./scripts/config --file out/.config -d DUMP_TASKS_MEM >/dev/null 2>&1 || true
+          # 以原厂 .config 为唯一基准，逐键对齐：原厂有、但被 olddefconfig 裁掉/改掉的键，
+          # 全部按原厂值写回。这样内核配置 ≈ 出 ROM 的那颗内核，排除「配置偏离」这条变量。
+          # 覆盖项只有四个：MODULE_SIG_FORCE 关（否则 vendor 模块签名对不上）、
+          # DUMP_TASKS_MEM 关（本树无 update_user_tasklist 实现）、链接必需的白名单、LOCALVERSION。
+          python3 - "$STOCKCONF" out/.config <<'CFGEOF'
+          import sys, re
+          stock, cur = sys.argv[1], sys.argv[2]
+
+          def parse(path):
+              d = {}
+              for raw in open(path, encoding='utf-8', errors='ignore'):
+                  line = raw.rstrip('\n')
+                  m = re.match(r'^(CONFIG_[A-Za-z0-9_]+)=.*$', line)
+                  if m:
+                      d[m.group(1)] = line
+                      continue
+                  m2 = re.match(r'^# (CONFIG_[A-Za-z0-9_]+) is not set$', line)
+                  if m2:
+                      d[m2.group(1)] = '# ' + m2.group(1) + ' is not set'
+              return d
+
+          cur_d = parse(cur)
+          stock_d = parse(stock)
+          # 工具链身份类键交给 Kconfig 自动识别，不照抄原厂（原厂是 clang 10，我们编的是 clang 12）
+          skip_pref = ('CONFIG_CC_', 'CONFIG_AS_', 'CONFIG_LD_', 'CONFIG_CLANG_VERSION',
+                       'CONFIG_GCC_VERSION', 'CONFIG_CC_VERSION_TEXT', 'CONFIG_CC_IS_')
+          changed = []
+          for k, v in stock_d.items():
+              if k.startswith(skip_pref):
+                  continue
+              if cur_d.get(k) != v:
+                  changed.append(k)
+                  cur_d[k] = v
+          for k in ('CONFIG_MODULE_SIG_FORCE', 'CONFIG_DUMP_TASKS_MEM'):
+              cur_d[k] = '# %s is not set' % k
+          for k in ('UFSFEATURE', 'UFSHPB', 'UFSHID', 'UFSTW', 'DRM_OPLUS',
+                    'PROCESS_RECLAIM_ENHANCE', 'OPLUS_FEATURE_WIFI_ROUTERBOOST',
+                    'OPLUS_FEATURE_DATA_EVAL'):
+              cur_d['CONFIG_' + k] = 'CONFIG_%s=y' % k
+          with open(cur, 'w', encoding='utf-8') as f:
+              for k in sorted(cur_d):
+                  f.write(cur_d[k] + '\n')
+          print('[cfg] 按原厂配置回写的键数: %d' % len(changed))
+          print('[cfg] 回写样例: %s' % ' '.join(changed[:60]))
+          for k in ('CONFIG_DM_DEFAULT_KEY', 'CONFIG_BLK_INLINE_ENCRYPTION', 'CONFIG_DM_CRYPT',
+                    'CONFIG_SCSI_UFS_CRYPTO', 'CONFIG_FSCRYPTO', 'CONFIG_OVERLAY_FS',
+                    'CONFIG_ANDROID_BINDER_IPC'):
+              print('[cfg] %s: %s' % (k, cur_d.get(k, 'MISSING')))
+          CFGEOF
           echo "[cfg] 最终开关: $(grep -E '^CONFIG_(UFSFEATURE|UFSHPB|DRM_OPLUS|PROCESS_RECLAIM_ENHANCE)=' out/.config | tr '\n' ' ')"
           echo "[cfg] 链接相关: $(grep -E '^CONFIG_(HAVE_ARCH_PREL32_RELOCATIONS|MODVERSIONS|RELOCATABLE|MODULE_SIG_ALL)=' out/.config | tr '\n' ' ')"
           echo "[check] 修正后仍命中（应为空）："
