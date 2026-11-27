@@ -552,7 +552,17 @@ jobs:
 
           # sm8250 / 4.19 厂商树：这棵树 Makefile 第413行无条件用 gcc-wrapper.py 覆盖 CC，
           # 且 REAL_CC 只在 LLVM 为空时定义 → 绝不能传 LLVM=1，必须显式 CC=clang
-          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error OPLUS_FEATURE_WIFI_ROUTERBOOST=1 OPLUS_FEATURE_ADFR_KERNEL=yes OPLUS_FEATURE_PROCESS_RECLAIM=yes OPLUS_FEATURE_UFSPLUS=1 OPLUS_FEATURE_UFS_SHOW_LATENCY=1 OPLUS_FEATURE_PADL_STATISTICS=1"
+          # 厂商特性开关：不再手工挑几个，直接用 OnePlus 官方 oplus_native_features.mk 的全量清单
+          # （这份清单就是出厂内核编译时用的那份，缺一个就会少编一个 oplus 驱动，
+          #   典型后果：oplus_sensor_fb / sscrpcd 这类 userspace 找不到内核侧的设备节点或接口）
+          FEAT_MK_URL="https://raw.githubusercontent.com/OnePlusOSS/android_kernel_oneplus_sm8250/$KERNEL_SOURCE_BRANCH/oplus_native_features.mk"
+          FEAT_MK=$GITHUB_WORKSPACE/kernel_workspace/oplus_native_features.mk
+          curl -sL --retry 3 -o "$FEAT_MK" "$FEAT_MK_URL" || true
+          FEAT_ARGS=$(grep -E '^OPLUS_[A-Za-z0-9_]+=[^ ]+$' "$FEAT_MK" | grep -v 'TARGET_PRODUCT' | tr '\n' ' ')
+          FEAT_N=$(echo $FEAT_ARGS | wc -w)
+          echo "[feat] 厂商特性开关数量: $FEAT_N"
+          [ "$FEAT_N" -gt 100 ] || { echo "[feat][warn] 特性清单异常，回退到最小集合"; FEAT_ARGS="OPLUS_FEATURE_WIFI_ROUTERBOOST=1 OPLUS_FEATURE_ADFR_KERNEL=yes OPLUS_FEATURE_PROCESS_RECLAIM=yes OPLUS_FEATURE_UFSPLUS=1 OPLUS_FEATURE_UFS_SHOW_LATENCY=1 OPLUS_FEATURE_PADL_STATISTICS=1"; }
+          MAKE_ARGS="O=out ARCH=$ARCH CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- KCFLAGS=-Wno-error $FEAT_ARGS"
           if [ "$DISABLE_LTO" = "true" ]; then
             MAKE_ARGS="$MAKE_ARGS CONFIG_LTO_NONE=y"
           fi
