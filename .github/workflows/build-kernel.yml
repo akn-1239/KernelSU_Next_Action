@@ -485,9 +485,7 @@ jobs:
                     '\t\t\t}' + NL +
                     '\t\t}' + NL +
                     '\t\tif (hdr->canary != SMEM_PRIVATE_CANARY)')
-              a3 = ('\t\tle16_to_cpu(phdr->host0), le16_to_cpu(phdr->host1));' + NL +
-                    NL +
-                    '\treturn -EINVAL;' + NL + '}' + NL)
+              a3 = '\t\tle16_to_cpu(phdr->host0), le16_to_cpu(phdr->host1));' + NL
               i3 = ('\t\tle16_to_cpu(phdr->host0), le16_to_cpu(phdr->host1));' + NL +
                     '\tprintk(KERN_ERR "SMEMDBG bad off=%d req=%u bytes %08x %08x %08x %08x' + BS + 'n",' + NL +
                     '\t       (int)((u32 *)hdr - (u32 *)phdr), item,' + NL +
@@ -505,9 +503,7 @@ jobs:
                     '\t\t\t\tbreak;' + NL +
                     '\t\t\t\t}' + NL +
                     '\t\tprintk(KERN_ERR "SMEMDBG firstcanary off=%d' + BS + 'n", f);' + NL +
-                    '\t}' + NL +
-                    NL +
-                    '\treturn -EINVAL;' + NL + '}' + NL)
+                    '\t}' + NL)
               ok = 0
               for a, i in ((a1, i1), (a2, i2), (a3, i3)):
                   if a in s:
