@@ -351,6 +351,103 @@ jobs:
           ERRREADYPATCH
           grep -q "ERRREADY_SKIP" drivers/soc/qcom/subsystem_restart.c && echo "[PATCH] 校验: err-ready 跳过补丁已写入" || { echo "[PATCH][fatal] err-ready 补丁未写入"; exit 1; }
 
+      - name: Patch (SMEM / GLINK 诊断打点)
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          python3 - <<'SMEMDBG'
+          import re
+          NL = chr(10)
+          # ---- 1) smem.c: bad_canary 处打印分区物理地址/大小/空闲指针/请求 item ----
+          p = 'drivers/soc/qcom/smem.c'
+          s = open(p, encoding='utf-8', errors='surrogateescape').read()
+          BS = chr(92)
+          dbg = (NL +
+                 '\tdev_err(smem->dev, "SMEMDBG badcanary: phys=0x%08x size=%u cls=%u host0=%hu host1=%hu off_unc=%u off_cache=%u item=%u",' + NL +
+                 '\t\tp_desc->phys_base, p_desc->size, p_desc->cacheline,' + NL +
+                 '\t\tle16_to_cpu(phdr->host0), le16_to_cpu(phdr->host1),' + NL +
+                 '\t\tle32_to_cpu(phdr->offset_free_uncached),' + NL +
+                 '\t\tle32_to_cpu(phdr->offset_free_cached), item);')
+          stmt_a = ('\tdev_err(smem->dev, "Found invalid canary in hosts %hu:%hu partition' + BS + 'n",' + NL +
+                    '\t\tle16_to_cpu(phdr->host0), le16_to_cpu(phdr->host1));')
+          stmt_b = ('\tdev_err(smem->dev, "Found invalid canary in hosts %hu:%hu partition' + BS + 'n",' + NL +
+                    '\t\t\tle16_to_cpu(phdr->host0), le16_to_cpu(phdr->host1));')
+          cnt = 0
+          if 'SMEMDBG badcanary' in s:
+              print('[PATCH] smem.c: bad_canary 打点已存在，跳过')
+          else:
+              for st in (stmt_a, stmt_b):
+                  cnt += s.count(st)
+                  s = s.replace(st, st + dbg)
+              if cnt:
+                  open(p, 'w', encoding='utf-8', errors='surrogateescape').write(s)
+                  print('[PATCH] smem.c: bad_canary 打点已写入 %d 处' % cnt)
+              else:
+                  print('[PATCH][fatal] smem.c: 未匹配 bad_canary 锚点')
+                  raise SystemExit(1)
+
+          # ---- 2) smem.c: probe 末尾打印 smem 基址 + 所有枚举到的分区 ----
+          old2 = '\t__smem = smem;' + NL
+          new2 = ('\tdev_err(&pdev->dev, "SMEMDBG region0: aux_base=0x%08x size=%zu num_regions=%d",' + NL +
+                  '\t\tsmem->regions[0].aux_base, (size_t)smem->regions[0].size, smem->num_regions);' + NL +
+                  '\t{' + NL +
+                  '\t\tint si;' + NL +
+                  '\t\tfor (si = 0; si < SMEM_HOST_COUNT; si++)' + NL +
+                  '\t\t\tif (smem->partition_desc[si].virt_base)' + NL +
+                  '\t\t\t\tdev_err(&pdev->dev, "SMEMDBG part host=%d phys=0x%08x size=%u cls=%u",' + NL +
+                  '\t\t\t\t\tsi, smem->partition_desc[si].phys_base,' + NL +
+                  '\t\t\t\t\tsmem->partition_desc[si].size, smem->partition_desc[si].cacheline);' + NL +
+                  '\t}' + NL +
+                  '\tif (smem->global_partition_desc.virt_base)' + NL +
+                  '\t\tdev_err(&pdev->dev, "SMEMDBG global part phys=0x%08x size=%u cls=%u",' + NL +
+                  '\t\t\tsmem->global_partition_desc.phys_base, smem->global_partition_desc.size,' + NL +
+                  '\t\t\tsmem->global_partition_desc.cacheline);' + NL + old2)
+          if 'SMEMDBG region0' in s:
+              print('[PATCH] smem.c: probe 打点已存在，跳过')
+          elif s.count(old2) == 1:
+              s = s.replace(old2, new2, 1)
+              open(p, 'w', encoding='utf-8', errors='surrogateescape').write(s)
+              print('[PATCH] smem.c: probe 打点已写入')
+          else:
+              print('[PATCH][fatal] smem.c: 未匹配 probe 锚点(%d)' % s.count(old2))
+              raise SystemExit(1)
+          SMEMDBG
+          python3 - <<'GLINKDBG'
+          NL = chr(10)
+          BS = chr(92)
+          p = 'drivers/rpmsg/qcom_glink_smem.c'
+          s = open(p, encoding='utf-8', errors='surrogateescape').read()
+          anchor = ('\tret = qcom_smem_alloc(remote_pid,' + NL +
+                    '\t\t\t      SMEM_GLINK_NATIVE_XPRT_DESCRIPTOR, 32);')
+          ins = (NL + '\tdev_err(dev, "GLINKDBG xprt_desc alloc: remote_pid=%u ret=%d' + BS + 'n",' + NL +
+                 '\t\tremote_pid, ret);')
+          if 'GLINKDBG' in s:
+              print('[PATCH] glink: 已打过补丁，跳过')
+          elif anchor in s:
+              s = s.replace(anchor, anchor + ins, 1)
+              open(p, 'w', encoding='utf-8', errors='surrogateescape').write(s)
+              print('[PATCH] glink: remote_pid/ret 打点已写入')
+          else:
+              print('[PATCH][fatal] glink: 未匹配 qcom_smem_alloc 锚点')
+              raise SystemExit(1)
+          GLINKDBG
+          python3 - <<'IOMEMDBG'
+          p = 'kernel/resource.c'
+          s = open(p, encoding='utf-8', errors='surrogateescape').read()
+          old = 'proc_create_seq_data("iomem", 0, NULL, &resource_op, &iomem_resource);'
+          new = 'proc_create_seq_data("iomem", 0444, NULL, &resource_op, &iomem_resource);'
+          if '0444, NULL, &resource_op' in s:
+              print('[PATCH] resource.c: /proc/iomem 已可读，跳过')
+          elif old in s:
+              open(p, 'w', encoding='utf-8', errors='surrogateescape').write(s.replace(old, new, 1))
+              print('[PATCH] resource.c: /proc/iomem 改为 0444')
+          else:
+              print('[PATCH][fatal] resource.c: 未匹配 iomem 锚点')
+              raise SystemExit(1)
+          IOMEMDBG
+          grep -q "SMEMDBG badcanary" drivers/soc/qcom/smem.c || { echo "[PATCH][fatal] smem 打点未写入"; exit 1; }
+          grep -q "0444, NULL, &resource_op" kernel/resource.c || { echo "[PATCH][fatal] iomem 未放开"; exit 1; }
+          echo "[PATCH] 校验通过"
+
       - name: Setup KernelSU-Next (standalone SUSFS)
         if: env.ENABLE_KERNELSU == 'true'
         run: |
