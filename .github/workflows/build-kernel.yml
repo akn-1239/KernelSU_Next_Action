@@ -448,6 +448,78 @@ jobs:
           grep -q "0444, NULL, &resource_op" kernel/resource.c || { echo "[PATCH][fatal] iomem 未放开"; exit 1; }
           echo "[PATCH] 校验通过"
 
+      - name: Patch (SMEM 条目 dump 诊断)
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          python3 - <<'SMDMP'
+          NL = chr(10)
+          BS = chr(92)
+          p = 'drivers/soc/qcom/smem.c'
+          s = open(p, encoding='utf-8', errors='surrogateescape').read()
+          if 'SMEMDBG hdrw' in s:
+              print('[PATCH] smem.c: entry dump 已存在，跳过')
+          else:
+              a1 = '\tphdr = p_desc->virt_base;' + NL
+              i1 = (a1 +
+                    '\t{' + NL +
+                    '\t\tstatic int smem_dbg_once;' + NL +
+                    '\t\tif (!smem_dbg_once) {' + NL +
+                    '\t\t\tsmem_dbg_once = 1;' + NL +
+                    '\t\t\tprintk(KERN_ERR "SMEMDBG hdrw %08x %08x %08x %08x %08x %08x %08x %08x -- %08x %08x %08x %08x' + BS + 'n",' + NL +
+                    '\t\t\t       ((u32 *)phdr)[0], ((u32 *)phdr)[1], ((u32 *)phdr)[2], ((u32 *)phdr)[3],' + NL +
+                    '\t\t\t       ((u32 *)phdr)[4], ((u32 *)phdr)[5], ((u32 *)phdr)[6], ((u32 *)phdr)[7],' + NL +
+                    '\t\t\t       ((u32 *)phdr)[8], ((u32 *)phdr)[9], ((u32 *)phdr)[10], ((u32 *)phdr)[11]);' + NL +
+                    '\t\t}' + NL +
+                    '\t}' + NL)
+              a2 = ('\twhile ((hdr < end) && ((hdr + 1) < end)) {' + NL +
+                    '\t\tif (hdr->canary != SMEM_PRIVATE_CANARY)')
+              i2 = ('\twhile ((hdr < end) && ((hdr + 1) < end)) {' + NL +
+                    '\t\t{' + NL +
+                    '\t\t\tstatic int smem_dbg_cnt;' + NL +
+                    '\t\t\tif (smem_dbg_cnt < 30) {' + NL +
+                    '\t\t\t\tprintk(KERN_ERR "SMEMDBG w[%d] off=%d can=%04x itm=%u sz=%u padh=%u u16at8=%u req=%u' + BS + 'n",' + NL +
+                    '\t\t\t\t       smem_dbg_cnt, (int)((u8 *)hdr - (u8 *)phdr), hdr->canary,' + NL +
+                    '\t\t\t\t       le16_to_cpu(hdr->item), le32_to_cpu(hdr->size),' + NL +
+                    '\t\t\t\t       le16_to_cpu(hdr->padding_hdr), *(u16 *)((u8 *)hdr + 8), item);' + NL +
+                    '\t\t\t\tsmem_dbg_cnt++;' + NL +
+                    '\t\t\t}' + NL +
+                    '\t\t}' + NL +
+                    '\t\tif (hdr->canary != SMEM_PRIVATE_CANARY)')
+              a3 = ('\t\tle16_to_cpu(phdr->host0), le16_to_cpu(phdr->host1));' + NL +
+                    NL +
+                    '\treturn -EINVAL;' + NL + '}' + NL)
+              i3 = ('\t\tle16_to_cpu(phdr->host0), le16_to_cpu(phdr->host1));' + NL +
+                    '\tprintk(KERN_ERR "SMEMDBG bad off=%d req=%u bytes %08x %08x %08x %08x' + BS + 'n",' + NL +
+                    '\t       (int)((u32 *)hdr - (u32 *)phdr), item,' + NL +
+                    '\t       ((u32 *)hdr)[0], ((u32 *)hdr)[1], ((u32 *)hdr)[2], ((u32 *)hdr)[3]);' + NL +
+                    '\tprintk(KERN_ERR "SMEMDBG meta size=%u unc=%u cache=%u e0 %08x %08x %08x %08x' + BS + 'n",' + NL +
+                    '\t       le32_to_cpu(phdr->size), le32_to_cpu(phdr->offset_free_uncached),' + NL +
+                    '\t       le32_to_cpu(phdr->offset_free_cached),' + NL +
+                    '\t       ((u32 *)((u8 *)phdr + 32))[0], ((u32 *)((u8 *)phdr + 32))[1],' + NL +
+                    '\t       ((u32 *)((u8 *)phdr + 32))[2], ((u32 *)((u8 *)phdr + 32))[3]);' + NL +
+                    '\t{' + NL +
+                    '\t\tint i, f = -1;' + NL +
+                    '\t\tfor (i = 0; i < 512; i++)' + NL +
+                    '\t\t\tif (*(u16 *)((u8 *)phdr + i) == 0xa5a5) {' + NL +
+                    '\t\t\t\tf = i;' + NL +
+                    '\t\t\t\tbreak;' + NL +
+                    '\t\t\t\t}' + NL +
+                    '\t\tprintk(KERN_ERR "SMEMDBG firstcanary off=%d' + BS + 'n", f);' + NL +
+                    '\t}' + NL +
+                    NL +
+                    '\treturn -EINVAL;' + NL + '}' + NL)
+              ok = 0
+              for a, i in ((a1, i1), (a2, i2), (a3, i3)):
+                  if a in s:
+                      s = s.replace(a, i, 1)
+                      ok += 1
+                  else:
+                      print('[PATCH][fatal] smem.c: 锚点未匹配: ' + a.split(NL)[0])
+              if ok != 3:
+                  raise SystemExit(1)
+              open(p, 'w', encoding='utf-8', errors='surrogateescape').write(s)
+              print('[PATCH] smem.c: entry dump 写入 3 处')
+          SMDMP
       - name: Setup KernelSU-Next (standalone SUSFS)
         if: env.ENABLE_KERNELSU == 'true'
         run: |
