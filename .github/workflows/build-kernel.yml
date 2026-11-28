@@ -324,6 +324,33 @@ jobs:
           echo "[PATCH] 校验: kmsg_dump 出现次数 = $(grep -c kmsg_dump kernel/printk/printk.c || true)"
           grep -q "proc_create(\"kmsg_dump\"" kernel/printk/printk.c || { echo "[PATCH][fatal] 调试节点补丁未写入"; exit 1; }
 
+      - name: Patch (跳过 DSP err-ready 等待)
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          python3 - <<'ERRREADYPATCH'
+          NL = chr(10)
+          p = 'drivers/soc/qcom/subsystem_restart.c'
+          s = open(p, encoding='utf-8', errors='surrogateescape').read()
+          anchor = ('static int wait_for_err_ready(struct subsys_device *subsys)' + NL +
+                    '{' + NL + '\tint ret;' + NL)
+          if 'ERRREADY_SKIP' in s:
+              print('[PATCH] subsystem_restart.c: 已打过补丁，跳过')
+          elif anchor in s:
+              s = s.replace(anchor,
+                            anchor +
+                            '\t/* ERRREADY_SKIP: /proc/interrupts 显示 error_ready_interrupt 每路只计数 1，' + NL +
+                            '\t * 但 completion 被 reinit 清掉，wait_for_completion_timeout 必然超时，' + NL +
+                            '\t * 导致 subsystem_get 返回 -110，ADSP/CDSP/SLPI 全部被判失败。 */' + NL +
+                            '\tpr_info("[%s]: ERRREADY_SKIP' + chr(92) + 'n", subsys->desc->name);' + NL +
+                            '\treturn 0;' + NL + NL, 1)
+              open(p, 'w', encoding='utf-8', errors='surrogateescape').write(s)
+              print('[PATCH] subsystem_restart.c: wait_for_err_ready() 直接返回 0')
+          else:
+              print('[PATCH][fatal] 未找到 wait_for_err_ready 锚点')
+              raise SystemExit(1)
+          ERRREADYPATCH
+          grep -q "ERRREADY_SKIP" drivers/soc/qcom/subsystem_restart.c && echo "[PATCH] 校验: err-ready 跳过补丁已写入" || { echo "[PATCH][fatal] err-ready 补丁未写入"; exit 1; }
+
       - name: Setup KernelSU-Next (standalone SUSFS)
         if: env.ENABLE_KERNELSU == 'true'
         run: |
@@ -777,6 +804,9 @@ jobs:
                   cur_d[k] = v
           for k in ('CONFIG_MODULE_SIG_FORCE', 'CONFIG_DUMP_TASKS_MEM'):
               cur_d[k] = '# %s is not set' % k
+          # 4MB printk 缓冲区（原 512KB/1MB），否则 oplus 充电 iio 报错的刷屏会在
+          # 开机 80 秒左右把 0~80 秒的启动日志全部冲掉，抓不到 DSP/PIL 初始化现场。
+          cur_d['CONFIG_LOG_BUF_SHIFT'] = 'CONFIG_LOG_BUF_SHIFT=22'
           for k in ('UFSFEATURE', 'UFSHPB', 'UFSHID', 'UFSTW', 'DRM_OPLUS',
                     'PROCESS_RECLAIM_ENHANCE', 'OPLUS_FEATURE_WIFI_ROUTERBOOST',
                     'OPLUS_FEATURE_DATA_EVAL'):
