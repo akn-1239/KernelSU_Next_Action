@@ -262,6 +262,68 @@ jobs:
               print('[SKIP] vmlinux.lds.S: 无 RTIC_BSS')
           PATCHEOF
 
+      - name: Debug patch (导出内核日志到 /proc/kmsg_dump)
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          python3 - <<'DMESGPATCH'
+          NL = chr(10)
+          p = 'kernel/printk/printk.c'
+          s = open(p, encoding='utf-8', errors='surrogateescape').read()
+          if 'kmsg_dump_read' in s:
+              print('[PATCH] printk.c: /proc/kmsg_dump 已存在，跳过')
+          else:
+              head = '#include <linux/proc_fs.h>' + NL + '#include <linux/uaccess.h>' + NL
+              s = s.replace('#include <linux/syscalls.h>', '#include <linux/syscalls.h>' + NL + head, 1)
+              if '#include <linux/proc_fs.h>' not in s:
+                  s = head + s
+              code = (
+                  NL + '/* ---- debug: 让 shell 也能读到完整内核日志 ---- */' + NL +
+                  'static ssize_t kmsg_dump_read(struct file *file, char __user *ubuf,' + NL +
+                  '                              size_t count, loff_t *ppos)' + NL +
+                  '{' + NL +
+                  '        int len;' + NL +
+                  '        if (*ppos)' + NL +
+                  '                return 0;' + NL +
+                  '        len = syslog_print_all(ubuf, count, false);' + NL +
+                  '        if (len < 0)' + NL +
+                  '                return len;' + NL +
+                  '        *ppos += len;' + NL +
+                  '        return len;' + NL +
+                  '}' + NL +
+                  'static const struct file_operations kmsg_dump_fops = {' + NL +
+                  '        .read = kmsg_dump_read,' + NL +
+                  '        .llseek = default_llseek,' + NL +
+                  '};' + NL +
+                  'static int __init kmsg_dump_init(void)' + NL +
+                  '{' + NL +
+                  '        proc_create("kmsg_dump", 0444, NULL, &kmsg_dump_fops);' + NL +
+                  '        return 0;' + NL +
+                  '}' + NL +
+                  'late_initcall(kmsg_dump_init);' + NL)
+              s = s + code
+              open(p, 'w', encoding='utf-8', errors='surrogateescape').write(s)
+              print('[PATCH] printk.c: 已加入 /proc/kmsg_dump (0444)')
+          DMESGPATCH
+          python3 - <<'SYSPATCH'
+          NL = chr(10)
+          p = 'kernel/printk/printk.c'
+          s = open(p, encoding='utf-8', errors='surrogateescape').read()
+          anchor = 'static int check_syslog_permissions(int type, int source)' + NL + '{' + NL
+          if 'DEBUG_SYSLOG_BYPASS' in s:
+              print('[PATCH] check_syslog_permissions 已打过补丁，跳过')
+          elif anchor in s:
+              s = s.replace(anchor,
+                            anchor + '        /* DEBUG_SYSLOG_BYPASS: 跳过 dmesg_restrict/SELinux 限制 */' + NL +
+                            '        return 0;' + NL, 1)
+              open(p, 'w', encoding='utf-8', errors='surrogateescape').write(s)
+              print('[PATCH] check_syslog_permissions: 已改为无条件放行（dmesg 可直接读）')
+          else:
+              print('[PATCH][warn] 未找到 check_syslog_permissions 锚点')
+          SYSPATCH
+          grep -q "DEBUG_SYSLOG_BYPASS" kernel/printk/printk.c && echo "[PATCH] 校验: syslog 放行补丁已写入" || echo "[PATCH][warn] syslog 放行补丁未写入"
+          echo "[PATCH] 校验: kmsg_dump 出现次数 = $(grep -c kmsg_dump kernel/printk/printk.c || true)"
+          grep -q "proc_create(\"kmsg_dump\"" kernel/printk/printk.c || { echo "[PATCH][fatal] 调试节点补丁未写入"; exit 1; }
+
       - name: Setup KernelSU-Next (standalone SUSFS)
         if: env.ENABLE_KERNELSU == 'true'
         run: |
